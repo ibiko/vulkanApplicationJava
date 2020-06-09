@@ -55,6 +55,7 @@ public class Ch00BaseCode {
 
         private long swapChain;
         private List<Long> swapChainImages;
+        private List<Long> swapChainImageViews;
         private int swapChainImageFormat;
         private VkExtent2D swapChainExtent;
 
@@ -111,6 +112,41 @@ public class Ch00BaseCode {
             pickPhysicalDevice();
             createLogicalDevice();
             createSwapChain();
+            createImageViews();
+        }
+
+        private void createImageViews() {
+            this.swapChainImageViews = new ArrayList<>(this.swapChainImages.size());
+
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                LongBuffer pImageView = stack.mallocLong(1);
+
+                for (long swapChainImage : this.swapChainImages) {
+                    VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.callocStack(stack);
+
+                    createInfo.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+                    createInfo.image(swapChainImage);
+                    createInfo.viewType(VK10.VK_IMAGE_VIEW_TYPE_2D);
+                    createInfo.format(this.swapChainImageFormat);
+
+                    createInfo.components().r(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+                    createInfo.components().g(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+                    createInfo.components().b(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+                    createInfo.components().a(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+
+                    createInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                    createInfo.subresourceRange().baseMipLevel(0);
+                    createInfo.subresourceRange().levelCount(1);
+                    createInfo.subresourceRange().baseArrayLayer(0);
+                    createInfo.subresourceRange().layerCount(1);
+
+                    if (VK10.vkCreateImageView(this.vkDevice, createInfo, null, pImageView) != VK10.VK_SUCCESS) {
+                        throw new RuntimeException("Failed to create image views");
+                    }
+
+                    this.swapChainImageViews.add(pImageView.get(0));
+                }
+            }
         }
 
         private void createSwapChain() {
@@ -136,7 +172,7 @@ public class Ch00BaseCode {
                 createInfoKHR.minImageCount(imageCount.get(0));
                 createInfoKHR.imageFormat(surfaceFormat.format());
                 createInfoKHR.imageColorSpace(surfaceFormat.colorSpace());
-//                createInfoKHR.imageExtent(vkExtent2D);
+                createInfoKHR.imageExtent(vkExtent2D);
                 createInfoKHR.imageArrayLayers(1);
                 createInfoKHR.imageUsage(VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 
@@ -502,6 +538,7 @@ public class Ch00BaseCode {
         }
 
         private void cleanup() {
+            this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.vkDevice, imageView, null));
             KHRSwapchain.vkDestroySwapchainKHR(this.vkDevice, this.swapChain, null);
             VK10.vkDestroyDevice(this.vkDevice, null);
 

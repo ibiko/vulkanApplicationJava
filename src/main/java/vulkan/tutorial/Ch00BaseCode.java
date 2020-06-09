@@ -11,9 +11,12 @@ import org.lwjgl.vulkan.*;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 
 public class Ch00BaseCode {
@@ -28,6 +31,9 @@ public class Ch00BaseCode {
         private static final int HEIGHT = 600;
         private static final boolean ENABLE_VALIDATION_LAYERS = Configuration.DEBUG.get(true);
         private static final Set<String> VALIDATION_LAYERS;
+        private static final Set<String> DEVICE_EXTENSIONS = Stream.of(KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME)
+                .collect(Collectors.toSet());
+        private static final int UINT32_MAX = 0xFFFFFFFF;
 
         static {
             if (ENABLE_VALIDATION_LAYERS) {
@@ -46,6 +52,11 @@ public class Ch00BaseCode {
         private VkDevice vkDevice;
         private VkQueue vkGraphicsQueue;
         private VkQueue vkPresentQueue;
+
+        private long swapChain;
+        private List<Long> swapChainImages;
+        private int swapChainImageFormat;
+        private VkExtent2D swapChainExtent;
 
         private static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
             VkDebugUtilsMessengerCallbackDataEXT callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
@@ -99,6 +110,74 @@ public class Ch00BaseCode {
             createSurface();
             pickPhysicalDevice();
             createLogicalDevice();
+            createSwapChain();
+        }
+
+        private void createSwapChain() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                SwapChainSupportDetails swapChainSupport = querySwapChainSupport(this.vkPhysicalDevice, stack);
+
+                VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.getFormats());
+                int presentMode = chooseSwapPresentMode(swapChainSupport.getPresentMode());
+                VkExtent2D vkExtent2D = chooseSwapExtent(swapChainSupport.getCapabilities());
+
+                IntBuffer imageCount = stack.ints(swapChainSupport.getCapabilities().minImageCount() + 1);
+
+                if (swapChainSupport.getCapabilities().maxImageCount() > 0 && imageCount.get(0) > swapChainSupport.getCapabilities().maxImageCount()) {
+                    imageCount.put(0, swapChainSupport.getCapabilities().maxImageCount());
+                }
+
+                VkSwapchainCreateInfoKHR createInfoKHR = VkSwapchainCreateInfoKHR.callocStack(stack);
+
+                createInfoKHR.sType(KHRSwapchain.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
+                createInfoKHR.surface(this.surface);
+
+                //Image settings
+                createInfoKHR.minImageCount(imageCount.get(0));
+                createInfoKHR.imageFormat(surfaceFormat.format());
+                createInfoKHR.imageColorSpace(surfaceFormat.colorSpace());
+//                createInfoKHR.imageExtent(vkExtent2D);
+                createInfoKHR.imageArrayLayers(1);
+                createInfoKHR.imageUsage(VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+
+                QueueFamilyIndices indices = findQueueFamilies(this.vkPhysicalDevice);
+
+                if (!indices.getGraphicsFamily().equals(indices.getPresentationFamily())) {
+                    createInfoKHR.imageSharingMode(VK10.VK_SHARING_MODE_CONCURRENT);
+                    createInfoKHR.pQueueFamilyIndices(stack.ints(indices.getGraphicsFamily(), indices.getPresentationFamily()));
+                } else {
+                    createInfoKHR.imageSharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
+                }
+
+                createInfoKHR.preTransform(swapChainSupport.getCapabilities().currentTransform());
+                createInfoKHR.compositeAlpha(KHRSurface.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+                createInfoKHR.presentMode(presentMode);
+                createInfoKHR.clipped(true);
+                createInfoKHR.oldSwapchain(VK10.VK_NULL_HANDLE);
+
+                LongBuffer pSwapChain = stack.longs(VK10.VK_NULL_HANDLE);
+
+                if (KHRSwapchain.vkCreateSwapchainKHR(this.vkDevice, createInfoKHR, null, pSwapChain) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create swap chain");
+                }
+
+                this.swapChain = pSwapChain.get(0);
+
+                KHRSwapchain.vkGetSwapchainImagesKHR(this.vkDevice, this.swapChain, imageCount, null);
+
+                LongBuffer pSwapChainImages = stack.mallocLong(imageCount.get(0));
+
+                KHRSwapchain.vkGetSwapchainImagesKHR(this.vkDevice, this.swapChain, imageCount, pSwapChainImages);
+
+                this.swapChainImages = new ArrayList<>(imageCount.get(0));
+
+                for (int i = 0; i < pSwapChainImages.capacity(); i++) {
+                    this.swapChainImages.add(pSwapChainImages.get(i));
+                }
+
+                this.swapChainImageFormat = surfaceFormat.format();
+                this.swapChainExtent = VkExtent2D.create().set(vkExtent2D);
+            }
         }
 
         private void createSurface() {
@@ -136,8 +215,10 @@ public class Ch00BaseCode {
 
                 createInfo.pEnabledFeatures(deviceFeatures);
 
+                createInfo.ppEnabledExtensionNames(asPointBuffer(DEVICE_EXTENSIONS));
+
                 if (ENABLE_VALIDATION_LAYERS) {
-                    createInfo.ppEnabledLayerNames(validationLayersAsPointerBuffer());
+                    createInfo.ppEnabledLayerNames(asPointBuffer(VALIDATION_LAYERS));
                 }
 
                 PointerBuffer pDevice = stack.pointers(VK10.VK_NULL_HANDLE);
@@ -155,6 +236,16 @@ public class Ch00BaseCode {
                 VK10.vkGetDeviceQueue(this.vkDevice, indices.getPresentationFamily(), 0, pQueue);
                 this.vkPresentQueue = new VkQueue(pQueue.get(0), this.vkDevice);
             }
+        }
+
+        private PointerBuffer asPointBuffer(Set<String> collection) {
+            MemoryStack stack = MemoryStack.stackGet();
+
+            PointerBuffer buffer = stack.mallocPointer(collection.size());
+
+            collection.stream().map(stack::UTF8).forEach(buffer::put);
+
+            return buffer.rewind();
         }
 
         private void pickPhysicalDevice() {
@@ -188,9 +279,92 @@ public class Ch00BaseCode {
             }
         }
 
+        private SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice physicalDevice, MemoryStack stack) {
+            SwapChainSupportDetails details = new SwapChainSupportDetails();
+
+            details.setCapabilities(VkSurfaceCapabilitiesKHR.mallocStack(stack));
+            KHRSurface.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, this.surface, details.getCapabilities());
+
+            IntBuffer count = stack.ints(0);
+
+            KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, this.surface, count, null);
+
+            if (count.get(0) != 0) {
+                details.setFormats(VkSurfaceFormatKHR.mallocStack(count.get(0), stack));
+                KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, this.surface, count, details.getFormats());
+            }
+
+            KHRSurface.vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, this.surface, count, null);
+
+            if (count.get(0) != 0) {
+                details.setPresentMode(stack.mallocInt(count.get(0)));
+                KHRSurface.vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, this.surface, count, details.getPresentMode());
+            }
+
+            return details;
+        }
+
         private boolean isDeviceSuitable(VkPhysicalDevice device) {
             QueueFamilyIndices indices = findQueueFamilies(device);
-            return indices.isComplete();
+
+            boolean swapChainAdequate = false;
+            boolean extensionsSupported = checkDeviceExtensionSupported(device);
+            if (extensionsSupported) {
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    SwapChainSupportDetails swapChainSupportDetails = querySwapChainSupport(device, stack);
+                    swapChainAdequate = swapChainSupportDetails.getFormats().hasRemaining() && swapChainSupportDetails.getPresentMode().hasRemaining();
+                }
+            }
+
+            return indices.isComplete() && extensionsSupported && swapChainAdequate;
+        }
+
+        private VkSurfaceFormatKHR chooseSwapSurfaceFormat(VkSurfaceFormatKHR.Buffer formats) {
+            return formats.stream()
+                    .filter(format -> format.format() == VK10.VK_FORMAT_B8G8R8_UNORM)
+                    .filter(format -> format.colorSpace() == KHRSurface.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                    .findAny()
+                    .orElse(formats.get(0));
+        }
+
+        private int chooseSwapPresentMode(IntBuffer formats) {
+            for (int i = 0; i < formats.capacity(); i++) {
+                if (formats.get(i) == KHRSurface.VK_PRESENT_MODE_MAILBOX_KHR) {
+                    return formats.get(i);
+                }
+            }
+            return KHRSurface.VK_PRESENT_MODE_FIFO_KHR;
+        }
+
+        private VkExtent2D chooseSwapExtent(VkSurfaceCapabilitiesKHR capabilities) {
+            if (capabilities.currentExtent().width() != UINT32_MAX) {
+                return capabilities.currentExtent();
+            }
+
+            VkExtent2D actualExtent = VkExtent2D.mallocStack().set(WIDTH, HEIGHT);
+
+            VkExtent2D minExtent = capabilities.minImageExtent();
+            VkExtent2D maxExtent = capabilities.maxImageExtent();
+
+            actualExtent.width(clamp(minExtent.width(), maxExtent.width(), actualExtent.width()));
+            actualExtent.height(clamp(minExtent.height(), maxExtent.height(), actualExtent.height()));
+
+            return actualExtent;
+        }
+
+        private int clamp(int min, int max, int value) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        private boolean checkDeviceExtensionSupported(VkPhysicalDevice device) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                IntBuffer extensionCount = stack.ints(0);
+                VK10.vkEnumerateDeviceExtensionProperties(device, (String) null, extensionCount, null);
+
+                VkExtensionProperties.Buffer availableExtensions = VkExtensionProperties.mallocStack(extensionCount.get(0), stack);
+
+                return availableExtensions.stream().collect(Collectors.toSet()).containsAll(DEVICE_EXTENSIONS);
+            }
         }
 
         private QueueFamilyIndices findQueueFamilies(VkPhysicalDevice vkPhysicalDevice) {
@@ -287,7 +461,7 @@ public class Ch00BaseCode {
                 createInfo.ppEnabledExtensionNames(getRequiredExtensions());
 
                 if (ENABLE_VALIDATION_LAYERS) {
-                    createInfo.ppEnabledLayerNames(validationLayersAsPointerBuffer());
+                    createInfo.ppEnabledLayerNames(asPointBuffer(VALIDATION_LAYERS));
                     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo = VkDebugUtilsMessengerCreateInfoEXT.callocStack(stack);
                     populateDebugMessengerCreateInfo(debugCreateInfo);
                     createInfo.pNext(debugCreateInfo.address());
@@ -303,16 +477,6 @@ public class Ch00BaseCode {
                 this.vkInstance = new VkInstance(instancePtr.get(0), createInfo);
             }
 
-        }
-
-        private PointerBuffer validationLayersAsPointerBuffer() {
-            MemoryStack stack = MemoryStack.stackGet();
-            PointerBuffer buffer = stack.mallocPointer(VALIDATION_LAYERS.size());
-
-            VALIDATION_LAYERS.stream().map(stack::UTF8)
-                    .forEach(buffer::put);
-
-            return buffer.rewind();
         }
 
         private PointerBuffer getRequiredExtensions() {
@@ -338,6 +502,7 @@ public class Ch00BaseCode {
         }
 
         private void cleanup() {
+            KHRSwapchain.vkDestroySwapchainKHR(this.vkDevice, this.swapChain, null);
             VK10.vkDestroyDevice(this.vkDevice, null);
 
             if (ENABLE_VALIDATION_LAYERS) {

@@ -7,6 +7,9 @@ import org.lwjgl.system.Configuration;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
+import vulkan.tutorial.shader.SPIRV;
+import vulkan.tutorial.shader.ShaderKind;
+import vulkan.tutorial.shader.ShaderSPIRVUtils;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
@@ -58,6 +61,8 @@ public class Ch00BaseCode {
         private List<Long> swapChainImageViews;
         private int swapChainImageFormat;
         private VkExtent2D swapChainExtent;
+
+        private long pipelineLayout;
 
         private static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
             VkDebugUtilsMessengerCallbackDataEXT callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
@@ -113,6 +118,128 @@ public class Ch00BaseCode {
             createLogicalDevice();
             createSwapChain();
             createImageViews();
+            createGraphicsPipeline();
+        }
+
+        private void createGraphicsPipeline() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                //Let's compile the GLSL shaders into SPIR-V at runtime using the shaderc library
+                //Check ShaderSPIRVUtils class to see how it can be done
+                SPIRV vertShaderSpirv = ShaderSPIRVUtils.compileShaderFile("shaders/shader.vert", ShaderKind.VERTEX_SHADER);
+                SPIRV fragShaderSpirv = ShaderSPIRVUtils.compileShaderFile("shaders/shader.frag", ShaderKind.FRAGMENT_SHADER);
+
+                long vertShaderModule = createShaderModuler(vertShaderSpirv.bytecode());
+                long fragShaderModule = createShaderModuler(fragShaderSpirv.bytecode());
+
+                ByteBuffer entryPoint = stack.UTF8("main");
+
+                VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.callocStack(2, stack);
+
+                VkPipelineShaderStageCreateInfo vertShaderStageInfo = shaderStages.get(0);
+                vertShaderStageInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+                vertShaderStageInfo.stage(VK10.VK_SHADER_STAGE_VERTEX_BIT);
+                vertShaderStageInfo.module(vertShaderModule);
+                vertShaderStageInfo.pName(entryPoint);
+
+                VkPipelineShaderStageCreateInfo fragShaderStageInfo = shaderStages.get(1);
+                fragShaderStageInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+                fragShaderStageInfo.stage(VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
+                fragShaderStageInfo.module(fragShaderModule);
+                fragShaderStageInfo.pName(entryPoint);
+
+                // ===> VERTEX STAGE <===
+                VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.callocStack(stack);
+                vertexInputInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+
+                // ===> ASSEMBLY STAGE <===
+                VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.callocStack(stack);
+                inputAssembly.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
+                inputAssembly.topology(VK10.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+                inputAssembly.primitiveRestartEnable(false);
+
+                // ===> VIEWPORT & SCISSOR
+                VkViewport.Buffer viewport = VkViewport.callocStack(1, stack);
+                viewport.x(0.0f);
+                viewport.y(0.0f);
+                viewport.width(this.swapChainExtent.width());
+                viewport.height(this.swapChainExtent.height());
+                viewport.minDepth(0.0f);
+                viewport.maxDepth(1.0f);
+
+                VkRect2D.Buffer scissor = VkRect2D.callocStack(1, stack);
+                scissor.offset(VkOffset2D.callocStack(stack).set(0, 0));
+                scissor.extent(this.swapChainExtent);
+
+                VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.callocStack(stack);
+                viewportState.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
+                viewportState.pViewports(viewport);
+                viewportState.pScissors(scissor);
+
+                // ===> RASTERIZATION STAGE <===
+                VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.callocStack(stack);
+                rasterizer.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+                rasterizer.depthClampEnable(false);
+                rasterizer.rasterizerDiscardEnable(false);
+                rasterizer.polygonMode(VK10.VK_POLYGON_MODE_FILL);
+                rasterizer.lineWidth(1.0f);
+                rasterizer.cullMode(VK10.VK_CULL_MODE_BACK_BIT);
+                rasterizer.frontFace(VK10.VK_FRONT_FACE_CLOCKWISE);
+                rasterizer.depthBiasEnable(false);
+
+                // ===> MULTISAMPLING <===
+                VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.callocStack(stack);
+                multisampling.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
+                multisampling.sampleShadingEnable(false);
+                multisampling.rasterizationSamples(VK10.VK_SAMPLE_COUNT_1_BIT);
+
+                // ===> COLOR BLENDING <===
+                VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachmentStates = VkPipelineColorBlendAttachmentState.callocStack(1, stack);
+                colorBlendAttachmentStates.colorWriteMask(VK10.VK_COLOR_COMPONENT_R_BIT | VK10.VK_COLOR_COMPONENT_G_BIT | VK10.VK_COLOR_COMPONENT_B_BIT | VK10.VK_COLOR_COMPONENT_A_BIT);
+                colorBlendAttachmentStates.blendEnable(false);
+
+                VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo = VkPipelineColorBlendStateCreateInfo.callocStack(stack);
+                colorBlendStateCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+                colorBlendStateCreateInfo.logicOpEnable(false);
+                colorBlendStateCreateInfo.logicOp(VK10.VK_LOGIC_OP_COPY);
+                colorBlendStateCreateInfo.pAttachments(colorBlendAttachmentStates);
+                colorBlendStateCreateInfo.blendConstants(stack.floats(0.0f, 0.0f, 0.0f, 0.0f));
+
+                // ===> PIPELINE LAYOUT CREATION <===
+                VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = VkPipelineLayoutCreateInfo.callocStack(stack);
+                pipelineLayoutCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+
+                LongBuffer pPipelineLayout = stack.longs(VK10.VK_NULL_HANDLE);
+
+                if(VK10.vkCreatePipelineLayout(this.vkDevice, pipelineLayoutCreateInfo, null, pPipelineLayout) != VK10.VK_SUCCESS){
+                    throw new RuntimeException("Failed to create pipeline layout");
+                }
+
+                this.pipelineLayout = pPipelineLayout.get(0);
+
+                // ===> RELEASE RESOURCES <===
+
+                VK10.vkDestroyShaderModule(this.vkDevice, vertShaderModule, null);
+                VK10.vkDestroyShaderModule(this.vkDevice, fragShaderModule, null);
+
+                vertShaderSpirv.free();
+                fragShaderSpirv.free();
+            }
+        }
+
+        private long createShaderModuler(ByteBuffer spirvCode) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkShaderModuleCreateInfo createInfo = VkShaderModuleCreateInfo.callocStack(stack);
+                createInfo.sType(VK10.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+                createInfo.pCode(spirvCode);
+
+                LongBuffer pShaderModule = stack.mallocLong(1);
+
+                if (VK10.vkCreateShaderModule(this.vkDevice, createInfo, null, pShaderModule) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create shader module");
+                }
+
+                return pShaderModule.get(0);
+            }
         }
 
         private void createImageViews() {
@@ -538,6 +665,7 @@ public class Ch00BaseCode {
         }
 
         private void cleanup() {
+            VK10.vkDestroyPipelineLayout(this.vkDevice, this.pipelineLayout, null);
             this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.vkDevice, imageView, null));
             KHRSwapchain.vkDestroySwapchainKHR(this.vkDevice, this.swapChain, null);
             VK10.vkDestroyDevice(this.vkDevice, null);

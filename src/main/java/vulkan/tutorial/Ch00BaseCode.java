@@ -61,6 +61,7 @@ public class Ch00BaseCode {
         private List<Long> swapChainImageViews;
         private int swapChainImageFormat;
         private VkExtent2D swapChainExtent;
+        private List<Long> swapChainFrameBuffers;
 
         private long pipelineLayout;
         private long renderPass;
@@ -122,6 +123,35 @@ public class Ch00BaseCode {
             createImageViews();
             createRenderPass();
             createGraphicsPipeline();
+            createFrameBuffers();
+        }
+
+        private void createFrameBuffers() {
+            this.swapChainFrameBuffers = new ArrayList<>(this.swapChainImageViews.size());
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                LongBuffer attachments = stack.mallocLong(1);
+                LongBuffer pFrameBuffer = stack.mallocLong(1);
+
+                //Lets allocate the create info struct once and just update the pAttachments field each iteration
+                VkFramebufferCreateInfo framebufferCreateInfo = VkFramebufferCreateInfo.callocStack(stack);
+                framebufferCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+                framebufferCreateInfo.renderPass(this.renderPass);
+                framebufferCreateInfo.width(this.swapChainExtent.width());
+                framebufferCreateInfo.height(this.swapChainExtent.height());
+                framebufferCreateInfo.layers(1);
+
+                for (long imageView : this.swapChainImageViews) {
+                    attachments.put(0, imageView);
+
+                    framebufferCreateInfo.pAttachments(attachments);
+
+                    if(VK10.vkCreateFramebuffer(this.vkDevice, framebufferCreateInfo, null, pFrameBuffer) != VK10.VK_SUCCESS){
+                        throw new RuntimeException("Failed to create framebuffer");
+                    }
+
+                    this.swapChainFrameBuffers.add(pFrameBuffer.get(0));
+                }
+            }
         }
 
         private void createRenderPass() {
@@ -272,7 +302,7 @@ public class Ch00BaseCode {
 
                 LongBuffer pGraphicsPipeline = stack.mallocLong(1);
 
-                if(VK10.vkCreateGraphicsPipelines(this.vkDevice, VK10.VK_NULL_HANDLE, pipelineCreateInfos, null, pGraphicsPipeline) != VK10.VK_SUCCESS){
+                if (VK10.vkCreateGraphicsPipelines(this.vkDevice, VK10.VK_NULL_HANDLE, pipelineCreateInfos, null, pGraphicsPipeline) != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Failed to create graphics pipeline");
                 }
 
@@ -727,6 +757,7 @@ public class Ch00BaseCode {
         }
 
         private void cleanup() {
+            this.swapChainFrameBuffers.forEach(frameBuffer -> VK10.vkDestroyFramebuffer(this.vkDevice, frameBuffer, null));
             VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);
             VK10.vkDestroyPipelineLayout(this.vkDevice, this.pipelineLayout, null);
             VK10.vkDestroyRenderPass(this.vkDevice, this.renderPass, null);

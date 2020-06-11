@@ -63,6 +63,8 @@ public class Ch00BaseCode {
         private VkExtent2D swapChainExtent;
 
         private long pipelineLayout;
+        private long renderPass;
+        private long graphicsPipeline;
 
         private static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
             VkDebugUtilsMessengerCallbackDataEXT callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
@@ -118,7 +120,44 @@ public class Ch00BaseCode {
             createLogicalDevice();
             createSwapChain();
             createImageViews();
+            createRenderPass();
             createGraphicsPipeline();
+        }
+
+        private void createRenderPass() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.callocStack(1, stack);
+                colorAttachment.format(this.swapChainImageFormat);
+                colorAttachment.samples(VK10.VK_SAMPLE_COUNT_1_BIT);
+                colorAttachment.loadOp(VK10.VK_ATTACHMENT_LOAD_OP_CLEAR);
+                colorAttachment.storeOp(VK10.VK_ATTACHMENT_STORE_OP_STORE);
+                colorAttachment.stencilLoadOp(VK10.VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+                colorAttachment.stencilStoreOp(VK10.VK_ATTACHMENT_STORE_OP_DONT_CARE);
+                colorAttachment.initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
+                colorAttachment.finalLayout(KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+                VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.callocStack(1, stack);
+                colorAttachmentRef.attachment(0);
+                colorAttachmentRef.layout(VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+                VkSubpassDescription.Buffer subpass = VkSubpassDescription.callocStack(1, stack);
+                subpass.pipelineBindPoint(VK10.VK_PIPELINE_BIND_POINT_GRAPHICS);
+                subpass.colorAttachmentCount(1);
+                subpass.pColorAttachments(colorAttachmentRef);
+
+                VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.callocStack(stack);
+                renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+                renderPassInfo.pAttachments(colorAttachment);
+                renderPassInfo.pSubpasses(subpass);
+
+                LongBuffer pRenderPass = stack.mallocLong(1);
+
+                if (VK10.vkCreateRenderPass(this.vkDevice, renderPassInfo, null, pRenderPass) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create redner pass");
+                }
+
+                this.renderPass = pRenderPass.get(0);
+            }
         }
 
         private void createGraphicsPipeline() {
@@ -210,11 +249,34 @@ public class Ch00BaseCode {
 
                 LongBuffer pPipelineLayout = stack.longs(VK10.VK_NULL_HANDLE);
 
-                if(VK10.vkCreatePipelineLayout(this.vkDevice, pipelineLayoutCreateInfo, null, pPipelineLayout) != VK10.VK_SUCCESS){
+                if (VK10.vkCreatePipelineLayout(this.vkDevice, pipelineLayoutCreateInfo, null, pPipelineLayout) != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Failed to create pipeline layout");
                 }
 
                 this.pipelineLayout = pPipelineLayout.get(0);
+
+                VkGraphicsPipelineCreateInfo.Buffer pipelineCreateInfos = VkGraphicsPipelineCreateInfo.callocStack(1, stack);
+                pipelineCreateInfos.sType(VK10.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+                pipelineCreateInfos.pStages(shaderStages);
+                pipelineCreateInfos.pVertexInputState(vertexInputInfo);
+                pipelineCreateInfos.pInputAssemblyState(inputAssembly);
+                pipelineCreateInfos.pViewportState(viewportState);
+                pipelineCreateInfos.pRasterizationState(rasterizer);
+                pipelineCreateInfos.pMultisampleState(multisampling);
+                pipelineCreateInfos.pColorBlendState(colorBlendStateCreateInfo);
+                pipelineCreateInfos.layout(this.pipelineLayout);
+                pipelineCreateInfos.renderPass(this.renderPass);
+                pipelineCreateInfos.subpass(0);
+                pipelineCreateInfos.basePipelineHandle(VK10.VK_NULL_HANDLE);
+                pipelineCreateInfos.basePipelineIndex(-1);
+
+                LongBuffer pGraphicsPipeline = stack.mallocLong(1);
+
+                if(VK10.vkCreateGraphicsPipelines(this.vkDevice, VK10.VK_NULL_HANDLE, pipelineCreateInfos, null, pGraphicsPipeline) != VK10.VK_SUCCESS){
+                    throw new RuntimeException("Failed to create graphics pipeline");
+                }
+
+                this.graphicsPipeline = pGraphicsPipeline.get(0);
 
                 // ===> RELEASE RESOURCES <===
 
@@ -665,7 +727,9 @@ public class Ch00BaseCode {
         }
 
         private void cleanup() {
+            VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);
             VK10.vkDestroyPipelineLayout(this.vkDevice, this.pipelineLayout, null);
+            VK10.vkDestroyRenderPass(this.vkDevice, this.renderPass, null);
             this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.vkDevice, imageView, null));
             KHRSwapchain.vkDestroySwapchainKHR(this.vkDevice, this.swapChain, null);
             VK10.vkDestroyDevice(this.vkDevice, null);

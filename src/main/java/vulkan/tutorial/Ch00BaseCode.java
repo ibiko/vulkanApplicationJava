@@ -66,6 +66,8 @@ public class Ch00BaseCode {
         private long pipelineLayout;
         private long renderPass;
         private long graphicsPipeline;
+        private long commandPool;
+        private List<VkCommandBuffer> commandBuffers;
 
         private static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
             VkDebugUtilsMessengerCallbackDataEXT callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
@@ -124,6 +126,84 @@ public class Ch00BaseCode {
             createRenderPass();
             createGraphicsPipeline();
             createFrameBuffers();
+            createCommandPool();
+            createCommandBuffers();
+        }
+
+        private void createCommandBuffers() {
+            final int commandBuffersCount = this.swapChainFrameBuffers.size();
+            this.commandBuffers = new ArrayList<>(commandBuffersCount);
+
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.callocStack(stack);
+                allocInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+                allocInfo.commandPool(this.commandPool);
+                allocInfo.level(VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+                allocInfo.commandBufferCount(commandBuffersCount);
+
+                PointerBuffer pCommandBuffers = stack.mallocPointer(commandBuffersCount);
+
+                if (VK10.vkAllocateCommandBuffers(this.vkDevice, allocInfo, pCommandBuffers) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to allocate command buffers");
+                }
+
+                for (int i = 0; i < commandBuffersCount; i++) {
+                    this.commandBuffers.add(new VkCommandBuffer(pCommandBuffers.get(i), this.vkDevice));
+                }
+
+                VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.callocStack(stack);
+                beginInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+
+                VkRenderPassBeginInfo renderPassInfo = VkRenderPassBeginInfo.callocStack(stack);
+                renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+                renderPassInfo.renderPass(this.renderPass);
+                VkRect2D renderArea = VkRect2D.callocStack(stack);
+                renderArea.offset(VkOffset2D.callocStack(stack).set(0, 0));
+                renderArea.extent(this.swapChainExtent);
+                renderPassInfo.renderArea(renderArea);
+                VkClearValue.Buffer clearValues = VkClearValue.callocStack(1, stack);
+                clearValues.color().float32(stack.floats(0.0f, 0.0f, 0.0f, 1.0f));
+                renderPassInfo.pClearValues(clearValues);
+
+                for (int i = 0; i < commandBuffersCount; i++) {
+                    VkCommandBuffer commandBuffer = this.commandBuffers.get(i);
+
+                    if (VK10.vkBeginCommandBuffer(commandBuffer, beginInfo) != VK10.VK_SUCCESS) {
+                        throw new RuntimeException("Failed to begin recording command buffer");
+                    }
+
+                    renderPassInfo.framebuffer(this.swapChainFrameBuffers.get(i));
+
+                    VK10.vkCmdBeginRenderPass(commandBuffer, renderPassInfo, VK10.VK_SUBPASS_CONTENTS_INLINE);
+                    {
+                        VK10.vkCmdBindPipeline(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, this.graphicsPipeline);
+                        VK10.vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+                    }
+                    VK10.vkCmdEndRenderPass(commandBuffer);
+
+                    if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
+                        throw new RuntimeException("Failed to record command buffer");
+                    }
+                }
+            }
+        }
+
+        private void createCommandPool() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                QueueFamilyIndices queueFamilyIndices = findQueueFamilies(this.vkPhysicalDevice);
+
+                VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.callocStack(stack);
+                poolInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+                poolInfo.queueFamilyIndex(queueFamilyIndices.getGraphicsFamily());
+
+                LongBuffer pCommandPool = stack.mallocLong(1);
+
+                if (VK10.vkCreateCommandPool(this.vkDevice, poolInfo, null, pCommandPool) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create command pool");
+                }
+
+                this.commandPool = pCommandPool.get(0);
+            }
         }
 
         private void createFrameBuffers() {
@@ -145,7 +225,7 @@ public class Ch00BaseCode {
 
                     framebufferCreateInfo.pAttachments(attachments);
 
-                    if(VK10.vkCreateFramebuffer(this.vkDevice, framebufferCreateInfo, null, pFrameBuffer) != VK10.VK_SUCCESS){
+                    if (VK10.vkCreateFramebuffer(this.vkDevice, framebufferCreateInfo, null, pFrameBuffer) != VK10.VK_SUCCESS) {
                         throw new RuntimeException("Failed to create framebuffer");
                     }
 
@@ -757,6 +837,7 @@ public class Ch00BaseCode {
         }
 
         private void cleanup() {
+            VK10.vkDestroyCommandPool(this.vkDevice, this.commandPool, null);
             this.swapChainFrameBuffers.forEach(frameBuffer -> VK10.vkDestroyFramebuffer(this.vkDevice, frameBuffer, null));
             VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);
             VK10.vkDestroyPipelineLayout(this.vkDevice, this.pipelineLayout, null);

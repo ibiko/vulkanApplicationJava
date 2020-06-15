@@ -14,10 +14,7 @@ import vulkan.tutorial.shader.ShaderSPIRVUtils;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -37,6 +34,8 @@ public class Ch00BaseCode {
         private static final Set<String> DEVICE_EXTENSIONS = Stream.of(KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME)
                 .collect(Collectors.toSet());
         private static final int UINT32_MAX = 0xFFFFFFFF;
+        private static final int MAX_FRAMES_IN_FLIGHT = 2;
+        private static final long UINT64_MAX = 0xFFFFFFFFFFFFFFFFL;
 
         static {
             if (ENABLE_VALIDATION_LAYERS) {
@@ -68,6 +67,10 @@ public class Ch00BaseCode {
         private long graphicsPipeline;
         private long commandPool;
         private List<VkCommandBuffer> commandBuffers;
+
+        private List<Frame> inFlightFrames;
+        private Map<Integer, Frame> imagesInFlight;
+        private int currentFrame;
 
         private static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
             VkDebugUtilsMessengerCallbackDataEXT callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
@@ -104,7 +107,7 @@ public class Ch00BaseCode {
             }
 
             GLFW.glfwWindowHint(GLFW.GLFW_CLIENT_API, GLFW.GLFW_NO_API);
-            GLFW.glfwWindowHint(GLFW.GLFW_RESIZABLE, GLFW.GLFW_FALSE);
+            GLFW.glfwWindowHint(GLFW.GLFW_RESIZABLE, GLFW.GLFW_TRUE);
 
             String title = getClass().getEnclosingClass().getSimpleName();
 
@@ -128,6 +131,35 @@ public class Ch00BaseCode {
             createFrameBuffers();
             createCommandPool();
             createCommandBuffers();
+            createSyncObjects();
+        }
+
+        private void createSyncObjects() {
+            this.inFlightFrames = new ArrayList<>(MAX_FRAMES_IN_FLIGHT);
+            this.imagesInFlight = new HashMap<>(this.swapChainImages.size());
+
+
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkSemaphoreCreateInfo semaphoreCreateInfo = VkSemaphoreCreateInfo.callocStack(stack);
+                semaphoreCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+
+                VkFenceCreateInfo fenceCreateInfo = VkFenceCreateInfo.callocStack(stack);
+                fenceCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+                fenceCreateInfo.flags(VK10.VK_FENCE_CREATE_SIGNALED_BIT);
+
+                LongBuffer pImageAvailableSemaphore = stack.mallocLong(1);
+                LongBuffer pRenderFinishedSemaphore = stack.mallocLong(1);
+                LongBuffer pFence = stack.mallocLong(1);
+
+                for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                    if (VK10.vkCreateSemaphore(this.vkDevice, semaphoreCreateInfo, null, pImageAvailableSemaphore) != VK10.VK_SUCCESS
+                            || VK10.vkCreateSemaphore(this.vkDevice, semaphoreCreateInfo, null, pRenderFinishedSemaphore) != VK10.VK_SUCCESS
+                            || VK10.vkCreateFence(this.vkDevice, fenceCreateInfo, null, pFence) != VK10.VK_SUCCESS) {
+                        throw new RuntimeException("Failed to create synchronization objects for the frame" + i);
+                    }
+                    this.inFlightFrames.add(new Frame(pImageAvailableSemaphore.get(0), pRenderFinishedSemaphore.get(0), pFence.get(0)));
+                }
+            }
         }
 
         private void createCommandBuffers() {
@@ -255,10 +287,19 @@ public class Ch00BaseCode {
                 subpass.colorAttachmentCount(1);
                 subpass.pColorAttachments(colorAttachmentRef);
 
+                VkSubpassDependency.Buffer dependency = VkSubpassDependency.callocStack(1, stack);
+                dependency.srcSubpass(VK10.VK_SUBPASS_EXTERNAL);
+                dependency.dstSubpass(0);
+                dependency.srcStageMask(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                dependency.srcAccessMask(0);
+                dependency.dstStageMask(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                dependency.dstAccessMask(VK10.VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
                 VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.callocStack(stack);
                 renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
                 renderPassInfo.pAttachments(colorAttachment);
                 renderPassInfo.pSubpasses(subpass);
+                renderPassInfo.pDependencies(dependency);
 
                 LongBuffer pRenderPass = stack.mallocLong(1);
 
@@ -277,8 +318,8 @@ public class Ch00BaseCode {
                 SPIRV vertShaderSpirv = ShaderSPIRVUtils.compileShaderFile("shaders/shader.vert", ShaderKind.VERTEX_SHADER);
                 SPIRV fragShaderSpirv = ShaderSPIRVUtils.compileShaderFile("shaders/shader.frag", ShaderKind.FRAGMENT_SHADER);
 
-                long vertShaderModule = createShaderModuler(vertShaderSpirv.bytecode());
-                long fragShaderModule = createShaderModuler(fragShaderSpirv.bytecode());
+                long vertShaderModule = createShaderModule(vertShaderSpirv.bytecode());
+                long fragShaderModule = createShaderModule(fragShaderSpirv.bytecode());
 
                 ByteBuffer entryPoint = stack.UTF8("main");
 
@@ -398,7 +439,7 @@ public class Ch00BaseCode {
             }
         }
 
-        private long createShaderModuler(ByteBuffer spirvCode) {
+        private long createShaderModule(ByteBuffer spirvCode) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkShaderModuleCreateInfo createInfo = VkShaderModuleCreateInfo.callocStack(stack);
                 createInfo.sType(VK10.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
@@ -446,6 +487,23 @@ public class Ch00BaseCode {
                     this.swapChainImageViews.add(pImageView.get(0));
                 }
             }
+        }
+
+        private void recreateSwapChain(){
+            VK10.vkDeviceWaitIdle(this.vkDevice);
+
+            cleanupSwapChain();
+
+            createSwapChain();
+            createImageViews();
+            createRenderPass();
+            createGraphicsPipeline();
+            createFrameBuffers();
+            createCommandBuffers();
+        }
+
+        private void cleanupSwapChain() {
+
         }
 
         private void createSwapChain() {
@@ -831,12 +889,75 @@ public class Ch00BaseCode {
         }
 
         private void mainLoop() {
+            int fps = 0;
+            double lastTime = System.currentTimeMillis();
             while (!GLFW.glfwWindowShouldClose(this.window)) {
+                if (System.currentTimeMillis() - lastTime >= 1000) {
+                    GLFW.glfwSetWindowTitle(this.window, String.valueOf(fps));
+                    lastTime = System.currentTimeMillis();
+                    fps = 0;
+                }
                 GLFW.glfwPollEvents();
+                drawFrame();
+//                System.out.println("FramesInFLight: " + this.imagesInFlight);
+                fps++;
+            }
+
+            VK10.vkDeviceWaitIdle(this.vkDevice);
+        }
+
+        private void drawFrame() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                Frame thisFrame = this.inFlightFrames.get(this.currentFrame);
+
+                VK10.vkWaitForFences(this.vkDevice, thisFrame.pFence(), true, UINT64_MAX);
+
+                IntBuffer pImageIndex = stack.mallocInt(1);
+
+                KHRSwapchain.vkAcquireNextImageKHR(this.vkDevice, this.swapChain, UINT64_MAX, thisFrame.getImageAvailableSemaphore(), VK10.VK_NULL_HANDLE, pImageIndex);
+
+                final int imageIndex = pImageIndex.get(0);
+
+                if (this.imagesInFlight.containsKey(imageIndex)) {
+                    VK10.vkWaitForFences(this.vkDevice, this.imagesInFlight.get(imageIndex).getFence(), true, UINT64_MAX);
+                }
+
+                this.imagesInFlight.put(imageIndex, thisFrame);
+
+                VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
+                submitInfo.sType(VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO);
+                submitInfo.waitSemaphoreCount(1);
+                submitInfo.pWaitSemaphores(thisFrame.pImageAvailableSemaphore());
+                submitInfo.pWaitDstStageMask(stack.ints(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
+                submitInfo.pSignalSemaphores(thisFrame.pRenderFinishedSemaphore());
+                submitInfo.pCommandBuffers(stack.pointers(this.commandBuffers.get(imageIndex)));
+
+                VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
+
+                if (VK10.vkQueueSubmit(this.vkGraphicsQueue, submitInfo, thisFrame.getFence()) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to submit draw command buffer");
+                }
+
+                VkPresentInfoKHR presentInfoKHR = VkPresentInfoKHR.callocStack(stack);
+                presentInfoKHR.sType(KHRSwapchain.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+                presentInfoKHR.pWaitSemaphores(thisFrame.pRenderFinishedSemaphore());
+                presentInfoKHR.swapchainCount(1);
+                presentInfoKHR.pSwapchains(stack.longs(this.swapChain));
+                presentInfoKHR.pImageIndices(pImageIndex);
+
+                KHRSwapchain.vkQueuePresentKHR(this.vkPresentQueue, presentInfoKHR);
+
+                this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
             }
         }
 
         private void cleanup() {
+            this.inFlightFrames.forEach(frame -> {
+                VK10.vkDestroySemaphore(this.vkDevice, frame.getRenderFinishedSemaphore(), null);
+                VK10.vkDestroySemaphore(this.vkDevice, frame.getImageAvailableSemaphore(), null);
+                VK10.vkDestroyFence(this.vkDevice, frame.getFence(), null);
+            });
+            this.imagesInFlight.clear();
             VK10.vkDestroyCommandPool(this.vkDevice, this.commandPool, null);
             this.swapChainFrameBuffers.forEach(frameBuffer -> VK10.vkDestroyFramebuffer(this.vkDevice, frameBuffer, null));
             VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);

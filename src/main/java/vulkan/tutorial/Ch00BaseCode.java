@@ -67,6 +67,10 @@ public class Ch00BaseCode {
         private long renderPass;
         private long graphicsPipeline;
         private long commandPool;
+
+        private long vertexBuffer;
+        private long vertexBufferMemory;
+
         private List<VkCommandBuffer> commandBuffers;
         private List<Frame> inFlightFrames;
         private Map<Integer, Frame> imagesInFlight;
@@ -131,9 +135,81 @@ public class Ch00BaseCode {
             pickPhysicalDevice();
             createLogicalDevice();
             createCommandPool();
+            createVertexBuffer();
             createSwapChainObjects();
             createSyncObjects();
         }
+
+        private void createVertexBuffer() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBufferCreateInfo bufferCreateInfo = VkBufferCreateInfo.callocStack(stack);
+                bufferCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+                bufferCreateInfo.size(Vertex.SIZEOF * Vertex.VERTICES.length);
+                bufferCreateInfo.usage(VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                bufferCreateInfo.sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
+
+                LongBuffer pVertexBuffer = stack.mallocLong(1);
+
+                if (VK10.vkCreateBuffer(this.vkDevice, bufferCreateInfo, null, pVertexBuffer) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create vertex buffer");
+                }
+
+                this.vertexBuffer = pVertexBuffer.get(0);
+
+                VkMemoryRequirements memoryRequirements = VkMemoryRequirements.mallocStack(stack);
+                VK10.vkGetBufferMemoryRequirements(this.vkDevice, this.vertexBuffer, memoryRequirements);
+
+                VkMemoryAllocateInfo allocateInfo = VkMemoryAllocateInfo.callocStack(stack);
+                allocateInfo.sType(VK10.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+                allocateInfo.allocationSize(memoryRequirements.size());
+                allocateInfo.memoryTypeIndex(findMemoryType(memoryRequirements.memoryTypeBits(),
+                        VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
+
+                LongBuffer pVertexBufferMemory = stack.mallocLong(1);
+
+                if (VK10.vkAllocateMemory(this.vkDevice, allocateInfo, null, pVertexBufferMemory) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to allocate vertex buffer memory");
+                }
+
+                this.vertexBufferMemory = pVertexBufferMemory.get(0);
+
+                VK10.vkBindBufferMemory(this.vkDevice, this.vertexBuffer, this.vertexBufferMemory, 0);
+
+                PointerBuffer data = stack.mallocPointer(1);
+
+                VK10.vkMapMemory(this.vkDevice, this.vertexBufferMemory, 0, bufferCreateInfo.size(), 0, data);
+                {
+                    memcpy(data.getByteBuffer(0, (int) bufferCreateInfo.size()), Vertex.VERTICES);
+                }
+
+                VK10.vkUnmapMemory(this.vkDevice, this.vertexBufferMemory);
+            }
+        }
+
+        private void memcpy(ByteBuffer byteBuffer, Vertex[] vertices) {
+            for (Vertex vertex : vertices) {
+                byteBuffer.putFloat(vertex.getPos().x());
+                byteBuffer.putFloat(vertex.getPos().y());
+
+                byteBuffer.putFloat(vertex.getColor().x());
+                byteBuffer.putFloat(vertex.getColor().y());
+                byteBuffer.putFloat(vertex.getColor().z());
+            }
+        }
+
+        private int findMemoryType(int typeFilter, int properties) {
+            VkPhysicalDeviceMemoryProperties memoryProperties = VkPhysicalDeviceMemoryProperties.mallocStack();
+            VK10.vkGetPhysicalDeviceMemoryProperties(this.vkPhysicalDevice, memoryProperties);
+
+            for (int i = 0; i < memoryProperties.memoryTypeCount(); i++) {
+                if ((typeFilter & (1 << i)) != 0 && (memoryProperties.memoryTypes(i).propertyFlags() & properties) == properties) {
+                    return i;
+                }
+            }
+
+            throw new RuntimeException("Failed to find suitable memory type");
+        }
+
 
         private void createSwapChainObjects() {
             createSwapChain();
@@ -219,7 +295,12 @@ public class Ch00BaseCode {
                     VK10.vkCmdBeginRenderPass(commandBuffer, renderPassInfo, VK10.VK_SUBPASS_CONTENTS_INLINE);
                     {
                         VK10.vkCmdBindPipeline(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, this.graphicsPipeline);
-                        VK10.vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+                        LongBuffer vertexBuffers = stack.longs(this.vertexBuffer);
+                        LongBuffer offsets = stack.longs(0);
+                        VK10.vkCmdBindVertexBuffers(commandBuffer, 0, vertexBuffers, offsets);
+
+                        VK10.vkCmdDraw(commandBuffer, Vertex.VERTICES.length, 1, 0, 0);
                     }
                     VK10.vkCmdEndRenderPass(commandBuffer);
 
@@ -945,7 +1026,7 @@ public class Ch00BaseCode {
                 if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR) {
                     recreateSwapChain();
                     return;
-                } else if(vkResult != VK10.VK_SUCCESS){
+                } else if (vkResult != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Cannot get image");
                 }
 
@@ -1005,6 +1086,9 @@ public class Ch00BaseCode {
 
         private void cleanup() {
             cleanupSwapChain();
+
+            VK10.vkDestroyBuffer(this.vkDevice, this.vertexBuffer, null);
+            VK10.vkFreeMemory(this.vkDevice, this.vertexBufferMemory, null);
 
             this.inFlightFrames.forEach(frame -> {
                 VK10.vkDestroySemaphore(this.vkDevice, frame.getRenderFinishedSemaphore(), null);

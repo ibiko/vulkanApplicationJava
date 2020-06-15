@@ -8,6 +8,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.*;
+import vulkan.tutorial.math.Vertex;
 import vulkan.tutorial.shader.SPIRV;
 import vulkan.tutorial.shader.ShaderKind;
 import vulkan.tutorial.shader.ShaderSPIRVUtils;
@@ -349,6 +350,8 @@ public class Ch00BaseCode {
                 // ===> VERTEX STAGE <===
                 VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.callocStack(stack);
                 vertexInputInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+                vertexInputInfo.pVertexBindingDescriptions(Vertex.getBindingDescription());
+                vertexInputInfo.pVertexAttributeDescriptions(Vertex.getAttributeDescriptions());
 
                 // ===> ASSEMBLY STAGE <===
                 VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.callocStack(stack);
@@ -942,6 +945,8 @@ public class Ch00BaseCode {
                 if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR) {
                     recreateSwapChain();
                     return;
+                } else if(vkResult != VK10.VK_SUCCESS){
+                    throw new RuntimeException("Cannot get image");
                 }
 
                 final int imageIndex = pImageIndex.get(0);
@@ -963,6 +968,7 @@ public class Ch00BaseCode {
                 VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
 
                 if (VK10.vkQueueSubmit(this.vkGraphicsQueue, submitInfo, thisFrame.getFence()) != VK10.VK_SUCCESS) {
+                    VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
                     throw new RuntimeException("Failed to submit draw command buffer");
                 }
 

@@ -6,3 +6,5 @@
 /target/
 /javaVulkanEngine.iml
 /.idea/
+/src/main/resources/shaders/frag.spv
+/src/main/resources/shaders/vert.spv

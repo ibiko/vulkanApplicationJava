@@ -6,6 +6,7 @@ import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.system.Configuration;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.*;
 import vulkan.tutorial.shader.SPIRV;
 import vulkan.tutorial.shader.ShaderKind;
@@ -46,6 +47,7 @@ public class Ch00BaseCode {
             }
         }
 
+        boolean frameBufferResize;
         private long window;
         private VkInstance vkInstance;
         private long debugMessenger;
@@ -54,20 +56,17 @@ public class Ch00BaseCode {
         private VkDevice vkDevice;
         private VkQueue vkGraphicsQueue;
         private VkQueue vkPresentQueue;
-
         private long swapChain;
         private List<Long> swapChainImages;
         private List<Long> swapChainImageViews;
         private int swapChainImageFormat;
         private VkExtent2D swapChainExtent;
         private List<Long> swapChainFrameBuffers;
-
         private long pipelineLayout;
         private long renderPass;
         private long graphicsPipeline;
         private long commandPool;
         private List<VkCommandBuffer> commandBuffers;
-
         private List<Frame> inFlightFrames;
         private Map<Integer, Frame> imagesInFlight;
         private int currentFrame;
@@ -116,6 +115,12 @@ public class Ch00BaseCode {
             if (this.window == MemoryUtil.NULL) {
                 throw new RuntimeException("Cannot create window");
             }
+
+            GLFW.glfwSetFramebufferSizeCallback(this.window, this::frameBufferSizeCallback);
+        }
+
+        private void frameBufferSizeCallback(long window, int width, int height) {
+            this.frameBufferResize = true;
         }
 
         private void initVulkan() {
@@ -124,14 +129,18 @@ public class Ch00BaseCode {
             createSurface();
             pickPhysicalDevice();
             createLogicalDevice();
+            createCommandPool();
+            createSwapChainObjects();
+            createSyncObjects();
+        }
+
+        private void createSwapChainObjects() {
             createSwapChain();
             createImageViews();
             createRenderPass();
             createGraphicsPipeline();
             createFrameBuffers();
-            createCommandPool();
             createCommandBuffers();
-            createSyncObjects();
         }
 
         private void createSyncObjects() {
@@ -489,22 +498,22 @@ public class Ch00BaseCode {
             }
         }
 
-        private void recreateSwapChain(){
+        private void recreateSwapChain() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                IntBuffer width = stack.ints(0);
+                IntBuffer height = stack.ints(0);
+
+                while (width.get(0) == 0 && height.get(0) == 0) {
+                    GLFW.glfwGetFramebufferSize(this.window, width, height);
+                    GLFW.glfwWaitEvents();
+                }
+            }
+
             VK10.vkDeviceWaitIdle(this.vkDevice);
-
             cleanupSwapChain();
-
-            createSwapChain();
-            createImageViews();
-            createRenderPass();
-            createGraphicsPipeline();
-            createFrameBuffers();
-            createCommandBuffers();
+            createSwapChainObjects();
         }
 
-        private void cleanupSwapChain() {
-
-        }
 
         private void createSwapChain() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -631,12 +640,21 @@ public class Ch00BaseCode {
             }
         }
 
-        private PointerBuffer asPointBuffer(Set<String> collection) {
+        private PointerBuffer asPointBuffer(Collection<String> collection) {
             MemoryStack stack = MemoryStack.stackGet();
 
             PointerBuffer buffer = stack.mallocPointer(collection.size());
 
             collection.stream().map(stack::UTF8).forEach(buffer::put);
+
+            return buffer.rewind();
+        }
+
+        private PointerBuffer asPointBuffer(List<? extends Pointer> list) {
+            MemoryStack stack = MemoryStack.stackGet();
+            PointerBuffer buffer = stack.mallocPointer(list.size());
+
+            list.forEach(buffer::put);
 
             return buffer.rewind();
         }
@@ -734,7 +752,12 @@ public class Ch00BaseCode {
                 return capabilities.currentExtent();
             }
 
-            VkExtent2D actualExtent = VkExtent2D.mallocStack().set(WIDTH, HEIGHT);
+            IntBuffer width = MemoryStack.stackGet().ints(0);
+            IntBuffer height = MemoryStack.stackGet().ints(0);
+
+            GLFW.glfwGetFramebufferSize(this.window, width, height);
+
+            VkExtent2D actualExtent = VkExtent2D.mallocStack().set(width.get(0), height.get(0));
 
             VkExtent2D minExtent = capabilities.minImageExtent();
             VkExtent2D maxExtent = capabilities.maxImageExtent();
@@ -914,7 +937,12 @@ public class Ch00BaseCode {
 
                 IntBuffer pImageIndex = stack.mallocInt(1);
 
-                KHRSwapchain.vkAcquireNextImageKHR(this.vkDevice, this.swapChain, UINT64_MAX, thisFrame.getImageAvailableSemaphore(), VK10.VK_NULL_HANDLE, pImageIndex);
+                int vkResult = KHRSwapchain.vkAcquireNextImageKHR(this.vkDevice, this.swapChain, UINT64_MAX, thisFrame.getImageAvailableSemaphore(), VK10.VK_NULL_HANDLE, pImageIndex);
+
+                if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR) {
+                    recreateSwapChain();
+                    return;
+                }
 
                 final int imageIndex = pImageIndex.get(0);
 
@@ -945,26 +973,41 @@ public class Ch00BaseCode {
                 presentInfoKHR.pSwapchains(stack.longs(this.swapChain));
                 presentInfoKHR.pImageIndices(pImageIndex);
 
-                KHRSwapchain.vkQueuePresentKHR(this.vkPresentQueue, presentInfoKHR);
+                vkResult = KHRSwapchain.vkQueuePresentKHR(this.vkPresentQueue, presentInfoKHR);
+
+                if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR || vkResult == KHRSwapchain.VK_SUBOPTIMAL_KHR || this.frameBufferResize) {
+                    this.frameBufferResize = false;
+                    recreateSwapChain();
+                } else if (vkResult != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to present swap chain image");
+                }
 
                 this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
             }
         }
 
-        private void cleanup() {
-            this.inFlightFrames.forEach(frame -> {
-                VK10.vkDestroySemaphore(this.vkDevice, frame.getRenderFinishedSemaphore(), null);
-                VK10.vkDestroySemaphore(this.vkDevice, frame.getImageAvailableSemaphore(), null);
-                VK10.vkDestroyFence(this.vkDevice, frame.getFence(), null);
-            });
-            this.imagesInFlight.clear();
-            VK10.vkDestroyCommandPool(this.vkDevice, this.commandPool, null);
+
+        private void cleanupSwapChain() {
             this.swapChainFrameBuffers.forEach(frameBuffer -> VK10.vkDestroyFramebuffer(this.vkDevice, frameBuffer, null));
+            VK10.vkFreeCommandBuffers(this.vkDevice, this.commandPool, asPointBuffer(this.commandBuffers));
             VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);
             VK10.vkDestroyPipelineLayout(this.vkDevice, this.pipelineLayout, null);
             VK10.vkDestroyRenderPass(this.vkDevice, this.renderPass, null);
             this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.vkDevice, imageView, null));
             KHRSwapchain.vkDestroySwapchainKHR(this.vkDevice, this.swapChain, null);
+        }
+
+        private void cleanup() {
+            cleanupSwapChain();
+
+            this.inFlightFrames.forEach(frame -> {
+                VK10.vkDestroySemaphore(this.vkDevice, frame.getRenderFinishedSemaphore(), null);
+                VK10.vkDestroySemaphore(this.vkDevice, frame.getImageAvailableSemaphore(), null);
+                VK10.vkDestroyFence(this.vkDevice, frame.getFence(), null);
+            });
+            this.inFlightFrames.clear();
+
+            VK10.vkDestroyCommandPool(this.vkDevice, this.commandPool, null);
             VK10.vkDestroyDevice(this.vkDevice, null);
 
             if (ENABLE_VALIDATION_LAYERS) {

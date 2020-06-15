@@ -71,6 +71,9 @@ public class Ch00BaseCode {
         private long vertexBuffer;
         private long vertexBufferMemory;
 
+        private long indexBuffer;
+        private long indexBufferMemory;
+
         private List<VkCommandBuffer> commandBuffers;
         private List<Frame> inFlightFrames;
         private Map<Integer, Frame> imagesInFlight;
@@ -136,8 +139,49 @@ public class Ch00BaseCode {
             createLogicalDevice();
             createCommandPool();
             createVertexBuffer();
+            createIndexBuffer();
             createSwapChainObjects();
             createSyncObjects();
+        }
+
+        private void createIndexBuffer() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                long bufferSize = Short.BYTES * Vertex.INDICES.length;
+
+                LongBuffer pBuffer = stack.mallocLong(1);
+                LongBuffer pBufferMemory = stack.mallocLong(1);
+
+                createBuffer(bufferSize,
+                        VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                        VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                        pBuffer,
+                        pBufferMemory);
+
+                long stagingBuffer = pBuffer.get(0);
+                long stagingBufferMemory = pBufferMemory.get(0);
+
+                PointerBuffer data = stack.mallocPointer(1);
+
+                VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
+                {
+                    memcpy(data.getByteBuffer(0, (int) bufferSize), Vertex.INDICES);
+                }
+                VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
+
+                createBuffer(bufferSize,
+                        VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK10.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                        VK10.VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+                        pBuffer,
+                        pBufferMemory);
+
+                this.indexBuffer = pBuffer.get(0);
+                this.indexBufferMemory = pBufferMemory.get(0);
+
+                copyBuffer(stagingBuffer, this.indexBuffer, bufferSize);
+
+                VK10.vkDestroyBuffer(this.vkDevice, stagingBuffer, null);
+                VK10.vkFreeMemory(this.vkDevice, stagingBufferMemory, null);
+            }
         }
 
         private void createVertexBuffer() {
@@ -160,6 +204,7 @@ public class Ch00BaseCode {
                 {
                     memcpy(data.getByteBuffer(0, (int) bufferSize), Vertex.VERTICES);
                 }
+                VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
                 createBuffer(bufferSize,
                         VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -251,6 +296,14 @@ public class Ch00BaseCode {
                 byteBuffer.putFloat(vertex.getColor().y());
                 byteBuffer.putFloat(vertex.getColor().z());
             }
+        }
+
+        private void memcpy(ByteBuffer byteBuffer, short[] indices) {
+            for (short index : indices) {
+                byteBuffer.putShort(index);
+            }
+
+            byteBuffer.rewind();
         }
 
         private int findMemoryType(int typeFilter, int properties) {
@@ -355,8 +408,9 @@ public class Ch00BaseCode {
                         LongBuffer vertexBuffers = stack.longs(this.vertexBuffer);
                         LongBuffer offsets = stack.longs(0);
                         VK10.vkCmdBindVertexBuffers(commandBuffer, 0, vertexBuffers, offsets);
+                        VK10.vkCmdBindIndexBuffer(commandBuffer, this.indexBuffer, 0, VK10.VK_INDEX_TYPE_UINT16);
 
-                        VK10.vkCmdDraw(commandBuffer, Vertex.VERTICES.length, 1, 0, 0);
+                        VK10.vkCmdDrawIndexed(commandBuffer, Vertex.INDICES.length, 1, 0, 0, 0);
                     }
                     VK10.vkCmdEndRenderPass(commandBuffer);
 
@@ -1142,6 +1196,9 @@ public class Ch00BaseCode {
 
         private void cleanup() {
             cleanupSwapChain();
+
+            VK10.vkDestroyBuffer(this.vkDevice, this.indexBuffer, null);
+            VK10.vkFreeMemory(this.vkDevice, this.indexBufferMemory, null);
 
             VK10.vkDestroyBuffer(this.vkDevice, this.vertexBuffer, null);
             VK10.vkFreeMemory(this.vkDevice, this.vertexBufferMemory, null);

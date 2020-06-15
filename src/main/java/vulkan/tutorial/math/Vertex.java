@@ -8,14 +8,17 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkVertexInputAttributeDescription;
 import org.lwjgl.vulkan.VkVertexInputBindingDescription;
 
-import java.awt.*;
-
 public class Vertex {
 
     public static final Vertex[] VERTICES = {
-            new Vertex(new Vector2f(0.0f, -0.5f), new Vector3f(1.0f, 1.0f, 1.0f)),
-            new Vertex(new Vector2f(0.5f, 0.5f), new Vector3f(0.0f, 1.0f, 0.0f)),
-            new Vertex(new Vector2f(-0.5f, 0.5f), new Vector3f(0.0f, 0.0f, 1.0f))
+            new Vertex(new Vector2f(-0.5f, -0.5f), new Vector3f(1.0f, 0.0f, 0.0f)),
+            new Vertex(new Vector2f(0.5f, -0.5f), new Vector3f(0.0f, 1.0f, 0.0f)),
+            new Vertex(new Vector2f(0.5f, 0.5f), new Vector3f(0.0f, 0.0f, 1.0f)),
+            new Vertex(new Vector2f(-0.5f, 0.5f), new Vector3f(1.0f, 1.0f, 1.0f))
+    };
+
+    public static final /*uint16_t*/ short[] INDICES = {
+            0, 1, 2, 2, 3, 0
     };
 
     public static final int SIZEOF = (2 + 3) * Float.BYTES;

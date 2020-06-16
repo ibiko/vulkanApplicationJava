@@ -12,6 +12,7 @@ import vulkan.tutorial.math.Vertex;
 import vulkan.tutorial.shader.SPIRV;
 import vulkan.tutorial.shader.ShaderKind;
 import vulkan.tutorial.shader.ShaderSPIRVUtils;
+import vulkan.tutorial.shader.UniformBufferObject;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
@@ -63,6 +64,7 @@ public class Ch00BaseCode {
         private int swapChainImageFormat;
         private VkExtent2D swapChainExtent;
         private List<Long> swapChainFrameBuffers;
+        private long descriptorSetLayout;
         private long pipelineLayout;
         private long renderPass;
         private long graphicsPipeline;
@@ -73,6 +75,9 @@ public class Ch00BaseCode {
 
         private long indexBuffer;
         private long indexBufferMemory;
+
+        private List<Long> uniformBuffers;
+        private List<Long> uniformBuffersMemory;
 
         private List<VkCommandBuffer> commandBuffers;
         private List<Frame> inFlightFrames;
@@ -140,8 +145,29 @@ public class Ch00BaseCode {
             createCommandPool();
             createVertexBuffer();
             createIndexBuffer();
+            createDescriptorSetLayout();
             createSwapChainObjects();
             createSyncObjects();
+        }
+
+        private void createUniformBuffers() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                this.uniformBuffers = new ArrayList<>(this.swapChainImages.size());
+                this.uniformBuffersMemory = new ArrayList<>(this.swapChainImages.size());
+
+                LongBuffer pBuffer = stack.mallocLong(1);
+                LongBuffer pBufferMemory = stack.mallocLong(1);
+
+                for (int i = 0; i < this.swapChainImages.size(); i++) {
+                    createBuffer(UniformBufferObject.SIZEOF,
+                            VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                            VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                            pBuffer,
+                            pBufferMemory);
+                    this.uniformBuffers.add(pBuffer.get(0));
+                    this.uniformBuffersMemory.add(pBufferMemory.get(0));
+                }
+            }
         }
 
         private void createIndexBuffer() {
@@ -326,7 +352,31 @@ public class Ch00BaseCode {
             createRenderPass();
             createGraphicsPipeline();
             createFrameBuffers();
+            createUniformBuffers();
             createCommandBuffers();
+        }
+
+        private void createDescriptorSetLayout() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkDescriptorSetLayoutBinding.Buffer uboLayoutBinding = VkDescriptorSetLayoutBinding.callocStack(1, stack);
+                uboLayoutBinding.binding(0);
+                uboLayoutBinding.descriptorCount(1);
+                uboLayoutBinding.descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                uboLayoutBinding.pImmutableSamplers(null);
+                uboLayoutBinding.stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT);
+
+                VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.callocStack(stack);
+                layoutInfo.sType(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+                layoutInfo.pBindings(uboLayoutBinding);
+
+                LongBuffer pDescriptorSetLayout = stack.mallocLong(1);
+
+                if (VK10.vkCreateDescriptorSetLayout(this.vkDevice, layoutInfo, null, pDescriptorSetLayout) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create descriptor set layout");
+                }
+
+                this.descriptorSetLayout = pDescriptorSetLayout.get(0);
+            }
         }
 
         private void createSyncObjects() {
@@ -600,6 +650,7 @@ public class Ch00BaseCode {
                 // ===> PIPELINE LAYOUT CREATION <===
                 VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = VkPipelineLayoutCreateInfo.callocStack(stack);
                 pipelineLayoutCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+                pipelineLayoutCreateInfo.pSetLayouts(stack.longs(this.descriptorSetLayout));
 
                 LongBuffer pPipelineLayout = stack.longs(VK10.VK_NULL_HANDLE);
 
@@ -1142,6 +1193,8 @@ public class Ch00BaseCode {
 
                 final int imageIndex = pImageIndex.get(0);
 
+                updateUniformBuffer(imageIndex);
+
                 if (this.imagesInFlight.containsKey(imageIndex)) {
                     VK10.vkWaitForFences(this.vkDevice, this.imagesInFlight.get(imageIndex).getFence(), true, UINT64_MAX);
                 }
@@ -1183,8 +1236,37 @@ public class Ch00BaseCode {
             }
         }
 
+        private void updateUniformBuffer(int currentImage) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                UniformBufferObject ubo = new UniformBufferObject();
+
+                ubo.getModel().rotate((float) (GLFW.glfwGetTime() * Math.toRadians(90)), 0.0f, 0.0f, 1.0f);
+                ubo.getView().lookAt(2.0f, 2.0f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+                ubo.getProj().perspective((float) Math.toRadians(45),
+                        (float) this.swapChainExtent.width() / (float) this.swapChainExtent.height(), 1.0f, 10.0f);
+                ubo.getProj().m11(ubo.getProj().m11() * -1);
+
+                PointerBuffer data = stack.mallocPointer(1);
+                VK10.vkMapMemory(this.vkDevice, this.uniformBuffersMemory.get(currentImage), 0, UniformBufferObject.SIZEOF, 0, data);
+                {
+                    memcpy(data.getByteBuffer(0, UniformBufferObject.SIZEOF), ubo);
+                }
+                VK10.vkUnmapMemory(this.vkDevice, this.uniformBuffersMemory.get(currentImage));
+            }
+        }
+
+        private void memcpy(ByteBuffer byteBuffer, UniformBufferObject uniformBufferObject) {
+            final int mat4size = 16 * Float.BYTES;
+
+            uniformBufferObject.getModel().get(0, byteBuffer);
+            uniformBufferObject.getView().get(mat4size, byteBuffer);
+            uniformBufferObject.getProj().get(mat4size * 2, byteBuffer);
+        }
+
 
         private void cleanupSwapChain() {
+            this.uniformBuffers.forEach(uniformBuffer -> VK10.vkDestroyBuffer(this.vkDevice, uniformBuffer, null));
+            this.uniformBuffersMemory.forEach(uniformBufferMemory -> VK10.vkFreeMemory(this.vkDevice, uniformBufferMemory, null));
             this.swapChainFrameBuffers.forEach(frameBuffer -> VK10.vkDestroyFramebuffer(this.vkDevice, frameBuffer, null));
             VK10.vkFreeCommandBuffers(this.vkDevice, this.commandPool, asPointBuffer(this.commandBuffers));
             VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);
@@ -1197,6 +1279,7 @@ public class Ch00BaseCode {
         private void cleanup() {
             cleanupSwapChain();
 
+            VK10.vkDestroyDescriptorSetLayout(this.vkDevice, this.descriptorSetLayout, null);
             VK10.vkDestroyBuffer(this.vkDevice, this.indexBuffer, null);
             VK10.vkFreeMemory(this.vkDevice, this.indexBufferMemory, null);
 

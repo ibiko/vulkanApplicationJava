@@ -9,10 +9,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.*;
 import vulkan.tutorial.math.Vertex;
-import vulkan.tutorial.shader.SPIRV;
-import vulkan.tutorial.shader.ShaderKind;
-import vulkan.tutorial.shader.ShaderSPIRVUtils;
-import vulkan.tutorial.shader.UniformBufferObject;
+import vulkan.tutorial.shader.*;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
@@ -64,7 +61,9 @@ public class Ch00BaseCode {
         private int swapChainImageFormat;
         private VkExtent2D swapChainExtent;
         private List<Long> swapChainFrameBuffers;
+        private long descriptorPool;
         private long descriptorSetLayout;
+        private List<Long> descriptorSets;
         private long pipelineLayout;
         private long renderPass;
         private long graphicsPipeline;
@@ -353,7 +352,73 @@ public class Ch00BaseCode {
             createGraphicsPipeline();
             createFrameBuffers();
             createUniformBuffers();
+            createDescriptorPool();
+            createDescriptorSets();
             createCommandBuffers();
+        }
+
+        private void createDescriptorSets() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                LongBuffer layouts = stack.mallocLong(this.swapChainImages.size());
+                for (int i = 0; i < layouts.capacity(); i++) {
+                    layouts.put(i, this.descriptorSetLayout);
+                }
+
+                VkDescriptorSetAllocateInfo allocateInfo = VkDescriptorSetAllocateInfo.callocStack(stack);
+                allocateInfo.sType(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+                allocateInfo.descriptorPool(this.descriptorPool);
+                allocateInfo.pSetLayouts(layouts);
+
+                LongBuffer pDescriptorSets = stack.mallocLong(this.swapChainImages.size());
+
+                if (VK10.vkAllocateDescriptorSets(this.vkDevice, allocateInfo, pDescriptorSets) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to allocate descriptor sets");
+                }
+
+                this.descriptorSets = new ArrayList<>(pDescriptorSets.capacity());
+
+                VkDescriptorBufferInfo.Buffer bufferInfos = VkDescriptorBufferInfo.callocStack(1, stack);
+                bufferInfos.offset(0);
+                bufferInfos.range(UniformBufferObject.SIZEOF);
+
+                VkWriteDescriptorSet.Buffer descriptorWrite = VkWriteDescriptorSet.callocStack(1, stack);
+                descriptorWrite.sType(VK10.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                descriptorWrite.dstBinding(0);
+                descriptorWrite.dstArrayElement(0);
+                descriptorWrite.descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                descriptorWrite.descriptorCount(1);
+                descriptorWrite.pBufferInfo(bufferInfos);
+
+                for (int i = 0; i < pDescriptorSets.capacity(); i++) {
+                    long descriptorSet = pDescriptorSets.get(i);
+                    bufferInfos.buffer(this.uniformBuffers.get(i));
+                    descriptorWrite.dstSet(descriptorSet);
+                    VK10.vkUpdateDescriptorSets(this.vkDevice, descriptorWrite, null);
+                    this.descriptorSets.add(descriptorSet);
+                }
+            }
+        }
+
+        private void createDescriptorPool() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+
+                VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.callocStack(1, stack);
+                poolSize.type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                poolSize.descriptorCount(this.swapChainImages.size());
+
+                VkDescriptorPoolCreateInfo poolCreateInfo = VkDescriptorPoolCreateInfo.callocStack(stack);
+                poolCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+                poolCreateInfo.pPoolSizes(poolSize);
+                poolCreateInfo.maxSets(this.swapChainImages.size());
+
+                LongBuffer pDescriptorPool = stack.mallocLong(1);
+
+                if (VK10.vkCreateDescriptorPool(this.vkDevice, poolCreateInfo, null, pDescriptorPool) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create descriptor pool");
+                }
+
+                this.descriptorPool = pDescriptorPool.get(0);
+            }
         }
 
         private void createDescriptorSetLayout() {
@@ -459,6 +524,9 @@ public class Ch00BaseCode {
                         LongBuffer offsets = stack.longs(0);
                         VK10.vkCmdBindVertexBuffers(commandBuffer, 0, vertexBuffers, offsets);
                         VK10.vkCmdBindIndexBuffer(commandBuffer, this.indexBuffer, 0, VK10.VK_INDEX_TYPE_UINT16);
+
+                        VK10.vkCmdBindDescriptorSets(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                this.pipelineLayout, 0, stack.longs(this.descriptorSets.get(i)), null);
 
                         VK10.vkCmdDrawIndexed(commandBuffer, Vertex.INDICES.length, 1, 0, 0, 0);
                     }
@@ -626,7 +694,7 @@ public class Ch00BaseCode {
                 rasterizer.polygonMode(VK10.VK_POLYGON_MODE_FILL);
                 rasterizer.lineWidth(1.0f);
                 rasterizer.cullMode(VK10.VK_CULL_MODE_BACK_BIT);
-                rasterizer.frontFace(VK10.VK_FRONT_FACE_CLOCKWISE);
+                rasterizer.frontFace(VK10.VK_FRONT_FACE_COUNTER_CLOCKWISE);
                 rasterizer.depthBiasEnable(false);
 
                 // ===> MULTISAMPLING <===
@@ -1241,7 +1309,7 @@ public class Ch00BaseCode {
                 UniformBufferObject ubo = new UniformBufferObject();
 
                 ubo.getModel().rotate((float) (GLFW.glfwGetTime() * Math.toRadians(90)), 0.0f, 0.0f, 1.0f);
-                ubo.getView().lookAt(2.0f, 2.0f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+                ubo.getView().lookAt(2.0f, 2.0f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
                 ubo.getProj().perspective((float) Math.toRadians(45),
                         (float) this.swapChainExtent.width() / (float) this.swapChainExtent.height(), 1.0f, 10.0f);
                 ubo.getProj().m11(ubo.getProj().m11() * -1);
@@ -1259,14 +1327,16 @@ public class Ch00BaseCode {
             final int mat4size = 16 * Float.BYTES;
 
             uniformBufferObject.getModel().get(0, byteBuffer);
-            uniformBufferObject.getView().get(mat4size, byteBuffer);
-            uniformBufferObject.getProj().get(mat4size * 2, byteBuffer);
+            uniformBufferObject.getView().get(AligmentUtils.alignas(mat4size, AligmentUtils.alignof(uniformBufferObject.getView())), byteBuffer);
+            uniformBufferObject.getProj().get(AligmentUtils.alignas(mat4size * 2, AligmentUtils.alignof(uniformBufferObject.getView())), byteBuffer);
         }
-
 
         private void cleanupSwapChain() {
             this.uniformBuffers.forEach(uniformBuffer -> VK10.vkDestroyBuffer(this.vkDevice, uniformBuffer, null));
             this.uniformBuffersMemory.forEach(uniformBufferMemory -> VK10.vkFreeMemory(this.vkDevice, uniformBufferMemory, null));
+
+            VK10.vkDestroyDescriptorPool(this.vkDevice, this.descriptorPool, null);
+
             this.swapChainFrameBuffers.forEach(frameBuffer -> VK10.vkDestroyFramebuffer(this.vkDevice, frameBuffer, null));
             VK10.vkFreeCommandBuffers(this.vkDevice, this.commandPool, asPointBuffer(this.commandBuffers));
             VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);

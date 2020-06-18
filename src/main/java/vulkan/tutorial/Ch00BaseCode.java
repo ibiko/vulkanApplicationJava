@@ -150,7 +150,7 @@ public class Ch00BaseCode {
             createCommandPool();
             createTextureImage();
             createTextureImageView();
-            createTextureImageSampler();
+            createTextureSampler();
             createVertexBuffer();
             createIndexBuffer();
             createDescriptorSetLayout();
@@ -158,7 +158,7 @@ public class Ch00BaseCode {
             createSyncObjects();
         }
 
-        private void createTextureImageSampler() {
+        private void createTextureSampler() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkSamplerCreateInfo samplerCreateInfo = VkSamplerCreateInfo.callocStack(stack);
                 samplerCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
@@ -175,13 +175,13 @@ public class Ch00BaseCode {
                 samplerCreateInfo.compareOp(VK10.VK_COMPARE_OP_ALWAYS);
                 samplerCreateInfo.mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_LINEAR);
 
-                LongBuffer pTextureSample = stack.mallocLong(1);
+                LongBuffer pTextureSampler = stack.mallocLong(1);
 
-                if (VK10.vkCreateSampler(this.vkDevice, samplerCreateInfo, null, pTextureSample) != VK10.VK_SUCCESS) {
+                if (VK10.vkCreateSampler(this.vkDevice, samplerCreateInfo, null, pTextureSampler) != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Failed to create texture sampler");
                 }
 
-                this.textureSampler = pTextureSample.get(0);
+                this.textureSampler = pTextureSampler.get(0);
             }
         }
 
@@ -199,7 +199,7 @@ public class Ch00BaseCode {
 
                 ByteBuffer pixels = STBImage.stbi_load(filename, pWidth, pHeight, pChannels, STBImage.STBI_rgb_alpha);
 
-                long imageSize = pWidth.get(0) * pHeight.get(0) * pChannels.get(0); //always 4 due to STBI_rgb_alpha
+                long imageSize = pWidth.get(0) * pHeight.get(0) * 4;//pChannels.get(0); //always 4 due to STBI_rgb_alpha
 
                 if (pixels == null) {
                     throw new RuntimeException("Failed to load texture image " + filename);
@@ -243,8 +243,8 @@ public class Ch00BaseCode {
 
                 transitionImageLayout(this.textureImage,
                         VK10.VK_FORMAT_R8G8B8A8_SRGB,
-                        VK10.VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                        VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
                 VK10.vkDestroyBuffer(this.vkDevice, pStagingBuffer.get(0), null);
                 VK10.vkFreeMemory(this.vkDevice, pStagingBufferMemory.get(0), null);
@@ -544,6 +544,9 @@ public class Ch00BaseCode {
                 byteBuffer.putFloat(vertex.getColor().x());
                 byteBuffer.putFloat(vertex.getColor().y());
                 byteBuffer.putFloat(vertex.getColor().z());
+
+                byteBuffer.putFloat(vertex.getTexCoords().x());
+                byteBuffer.putFloat(vertex.getTexCoords().y());
             }
         }
 
@@ -605,19 +608,35 @@ public class Ch00BaseCode {
                 bufferInfos.offset(0);
                 bufferInfos.range(UniformBufferObject.SIZEOF);
 
-                VkWriteDescriptorSet.Buffer descriptorWrite = VkWriteDescriptorSet.callocStack(1, stack);
-                descriptorWrite.sType(VK10.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                descriptorWrite.dstBinding(0);
-                descriptorWrite.dstArrayElement(0);
-                descriptorWrite.descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                descriptorWrite.descriptorCount(1);
-                descriptorWrite.pBufferInfo(bufferInfos);
+                VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.callocStack(1, stack);
+                imageInfo.imageLayout(VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                imageInfo.imageView(this.textureImageView);
+                imageInfo.sampler(this.textureSampler);
+
+                VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.callocStack(2, stack);
+
+                VkWriteDescriptorSet uboDescriptorWrite = descriptorWrites.get(0);
+                uboDescriptorWrite.sType(VK10.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                uboDescriptorWrite.dstBinding(0);
+                uboDescriptorWrite.dstArrayElement(0);
+                uboDescriptorWrite.descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                uboDescriptorWrite.descriptorCount(1);
+                uboDescriptorWrite.pBufferInfo(bufferInfos);
+
+                VkWriteDescriptorSet samplerDescriptorWrite = descriptorWrites.get(1);
+                samplerDescriptorWrite.sType(VK10.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                samplerDescriptorWrite.dstBinding(1);
+                samplerDescriptorWrite.dstArrayElement(0);
+                samplerDescriptorWrite.descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                samplerDescriptorWrite.descriptorCount(1);
+                samplerDescriptorWrite.pImageInfo(imageInfo);
 
                 for (int i = 0; i < pDescriptorSets.capacity(); i++) {
                     long descriptorSet = pDescriptorSets.get(i);
                     bufferInfos.buffer(this.uniformBuffers.get(i));
-                    descriptorWrite.dstSet(descriptorSet);
-                    VK10.vkUpdateDescriptorSets(this.vkDevice, descriptorWrite, null);
+                    uboDescriptorWrite.dstSet(descriptorSet);
+                    samplerDescriptorWrite.dstSet(descriptorSet);
+                    VK10.vkUpdateDescriptorSets(this.vkDevice, descriptorWrites, null);
                     this.descriptorSets.add(descriptorSet);
                 }
             }
@@ -626,13 +645,19 @@ public class Ch00BaseCode {
         private void createDescriptorPool() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
 
-                VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.callocStack(1, stack);
-                poolSize.type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                poolSize.descriptorCount(this.swapChainImages.size());
+                VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.callocStack(2, stack);
+
+                VkDescriptorPoolSize uniformBufferPoolSize = poolSizes.get(0);
+                uniformBufferPoolSize.type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                uniformBufferPoolSize.descriptorCount(this.swapChainImages.size());
+
+                VkDescriptorPoolSize textureSamplerPoolSize = poolSizes.get(1);
+                textureSamplerPoolSize.type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                textureSamplerPoolSize.descriptorCount(this.swapChainImages.size());
 
                 VkDescriptorPoolCreateInfo poolCreateInfo = VkDescriptorPoolCreateInfo.callocStack(stack);
                 poolCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
-                poolCreateInfo.pPoolSizes(poolSize);
+                poolCreateInfo.pPoolSizes(poolSizes);
                 poolCreateInfo.maxSets(this.swapChainImages.size());
 
                 LongBuffer pDescriptorPool = stack.mallocLong(1);
@@ -647,16 +672,25 @@ public class Ch00BaseCode {
 
         private void createDescriptorSetLayout() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkDescriptorSetLayoutBinding.Buffer uboLayoutBinding = VkDescriptorSetLayoutBinding.callocStack(1, stack);
+                VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.callocStack(2, stack);
+
+                VkDescriptorSetLayoutBinding uboLayoutBinding = bindings.get(0);
                 uboLayoutBinding.binding(0);
                 uboLayoutBinding.descriptorCount(1);
                 uboLayoutBinding.descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
                 uboLayoutBinding.pImmutableSamplers(null);
                 uboLayoutBinding.stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT);
 
+                VkDescriptorSetLayoutBinding samplerLayoutBinding = bindings.get(1);
+                samplerLayoutBinding.binding(1);
+                samplerLayoutBinding.descriptorCount(1);
+                samplerLayoutBinding.descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                samplerLayoutBinding.pImmutableSamplers(null);
+                samplerLayoutBinding.stageFlags(VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
+
                 VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.callocStack(stack);
                 layoutInfo.sType(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
-                layoutInfo.pBindings(uboLayoutBinding);
+                layoutInfo.pBindings(bindings);
 
                 LongBuffer pDescriptorSetLayout = stack.mallocLong(1);
 
@@ -1004,7 +1038,7 @@ public class Ch00BaseCode {
         private void createImageViews() {
             this.swapChainImageViews = new ArrayList<>(this.swapChainImages.size());
             for (long swapChainImage : this.swapChainImages) {
-                this.swapChainImageViews.add(createImageView(swapChainImage, VK10.VK_FORMAT_R8G8B8A8_SRGB));
+                this.swapChainImageViews.add(createImageView(swapChainImage, this.swapChainImageFormat));
             }
         }
 
@@ -1268,9 +1302,9 @@ public class Ch00BaseCode {
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     SwapChainSupportDetails swapChainSupportDetails = querySwapChainSupport(device, stack);
                     swapChainAdequate = swapChainSupportDetails.getFormats().hasRemaining() && swapChainSupportDetails.getPresentMode().hasRemaining();
-                    VkPhysicalDeviceFeatures suppportedFeatures = VkPhysicalDeviceFeatures.mallocStack(stack);
-                    VK10.vkGetPhysicalDeviceFeatures(device, suppportedFeatures);
-                    anisotropySupported = suppportedFeatures.samplerAnisotropy();
+                    VkPhysicalDeviceFeatures supportedFeatures = VkPhysicalDeviceFeatures.mallocStack(stack);
+                    VK10.vkGetPhysicalDeviceFeatures(device, supportedFeatures);
+                    anisotropySupported = supportedFeatures.samplerAnisotropy();
                 }
             }
 
@@ -1279,7 +1313,7 @@ public class Ch00BaseCode {
 
         private VkSurfaceFormatKHR chooseSwapSurfaceFormat(VkSurfaceFormatKHR.Buffer formats) {
             return formats.stream()
-                    .filter(format -> format.format() == VK10.VK_FORMAT_B8G8R8_UNORM)
+                    .filter(format -> format.format() == VK10.VK_FORMAT_B8G8R8_SRGB)
                     .filter(format -> format.colorSpace() == KHRSurface.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
                     .findAny()
                     .orElse(formats.get(0));
@@ -1584,7 +1618,7 @@ public class Ch00BaseCode {
             cleanupSwapChain();
 
             VK10.vkDestroySampler(this.vkDevice, this.textureSampler, null);
-            VK10.vkDestroyImage(this.vkDevice, this.textureImageView, null);
+            VK10.vkDestroyImageView(this.vkDevice, this.textureImageView, null);
             VK10.vkDestroyImage(this.vkDevice, this.textureImage, null);
             VK10.vkFreeMemory(this.vkDevice, this.textureImageMemory, null);
 

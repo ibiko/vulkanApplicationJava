@@ -72,6 +72,8 @@ public class Ch00BaseCode {
 
         private long textureImage;
         private long textureImageMemory;
+        private long textureImageView;
+        private long textureSampler;
 
         private long vertexBuffer;
         private long vertexBufferMemory;
@@ -147,11 +149,44 @@ public class Ch00BaseCode {
             createLogicalDevice();
             createCommandPool();
             createTextureImage();
+            createTextureImageView();
+            createTextureImageSampler();
             createVertexBuffer();
             createIndexBuffer();
             createDescriptorSetLayout();
             createSwapChainObjects();
             createSyncObjects();
+        }
+
+        private void createTextureImageSampler() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkSamplerCreateInfo samplerCreateInfo = VkSamplerCreateInfo.callocStack(stack);
+                samplerCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
+                samplerCreateInfo.magFilter(VK10.VK_FILTER_LINEAR);
+                samplerCreateInfo.minFilter(VK10.VK_FILTER_LINEAR);
+                samplerCreateInfo.addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                samplerCreateInfo.addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                samplerCreateInfo.addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                samplerCreateInfo.anisotropyEnable(true);
+                samplerCreateInfo.maxAnisotropy(16.0f);
+                samplerCreateInfo.borderColor(VK10.VK_BORDER_COLOR_INT_OPAQUE_BLACK);
+                samplerCreateInfo.unnormalizedCoordinates(false);
+                samplerCreateInfo.compareEnable(false);
+                samplerCreateInfo.compareOp(VK10.VK_COMPARE_OP_ALWAYS);
+                samplerCreateInfo.mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_LINEAR);
+
+                LongBuffer pTextureSample = stack.mallocLong(1);
+
+                if (VK10.vkCreateSampler(this.vkDevice, samplerCreateInfo, null, pTextureSample) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create texture sampler");
+                }
+
+                this.textureSampler = pTextureSample.get(0);
+            }
+        }
+
+        private void createTextureImageView() {
+            this.textureImageView = createImageView(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB);
         }
 
         private void createTextureImage() {
@@ -968,35 +1003,39 @@ public class Ch00BaseCode {
 
         private void createImageViews() {
             this.swapChainImageViews = new ArrayList<>(this.swapChainImages.size());
+            for (long swapChainImage : this.swapChainImages) {
+                this.swapChainImageViews.add(createImageView(swapChainImage, VK10.VK_FORMAT_R8G8B8A8_SRGB));
+            }
+        }
 
+        private Long createImageView(long image, int format) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
+
+                VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.callocStack(stack);
+
+                createInfo.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+                createInfo.image(image);
+                createInfo.viewType(VK10.VK_IMAGE_VIEW_TYPE_2D);
+                createInfo.format(format);
+//
+//                createInfo.components().r(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+//                createInfo.components().g(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+//                createInfo.components().b(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+//                createInfo.components().a(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
+
+                createInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                createInfo.subresourceRange().baseMipLevel(0);
+                createInfo.subresourceRange().levelCount(1);
+                createInfo.subresourceRange().baseArrayLayer(0);
+                createInfo.subresourceRange().layerCount(1);
+
                 LongBuffer pImageView = stack.mallocLong(1);
 
-                for (long swapChainImage : this.swapChainImages) {
-                    VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.callocStack(stack);
-
-                    createInfo.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
-                    createInfo.image(swapChainImage);
-                    createInfo.viewType(VK10.VK_IMAGE_VIEW_TYPE_2D);
-                    createInfo.format(this.swapChainImageFormat);
-
-                    createInfo.components().r(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
-                    createInfo.components().g(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
-                    createInfo.components().b(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
-                    createInfo.components().a(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
-
-                    createInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
-                    createInfo.subresourceRange().baseMipLevel(0);
-                    createInfo.subresourceRange().levelCount(1);
-                    createInfo.subresourceRange().baseArrayLayer(0);
-                    createInfo.subresourceRange().layerCount(1);
-
-                    if (VK10.vkCreateImageView(this.vkDevice, createInfo, null, pImageView) != VK10.VK_SUCCESS) {
-                        throw new RuntimeException("Failed to create image views");
-                    }
-
-                    this.swapChainImageViews.add(pImageView.get(0));
+                if (VK10.vkCreateImageView(this.vkDevice, createInfo, null, pImageView) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create image views");
                 }
+
+                return pImageView.get(0);
             }
         }
 
@@ -1112,6 +1151,7 @@ public class Ch00BaseCode {
                 }
 
                 VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.callocStack(stack);
+                deviceFeatures.samplerAnisotropy(true);
 
                 VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.callocStack(stack);
                 createInfo.sType(VK10.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
@@ -1221,15 +1261,20 @@ public class Ch00BaseCode {
             QueueFamilyIndices indices = findQueueFamilies(device);
 
             boolean swapChainAdequate = false;
+            boolean anisotropySupported = false;
+
             boolean extensionsSupported = checkDeviceExtensionSupported(device);
             if (extensionsSupported) {
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     SwapChainSupportDetails swapChainSupportDetails = querySwapChainSupport(device, stack);
                     swapChainAdequate = swapChainSupportDetails.getFormats().hasRemaining() && swapChainSupportDetails.getPresentMode().hasRemaining();
+                    VkPhysicalDeviceFeatures suppportedFeatures = VkPhysicalDeviceFeatures.mallocStack(stack);
+                    VK10.vkGetPhysicalDeviceFeatures(device, suppportedFeatures);
+                    anisotropySupported = suppportedFeatures.samplerAnisotropy();
                 }
             }
 
-            return indices.isComplete() && extensionsSupported && swapChainAdequate;
+            return indices.isComplete() && extensionsSupported && swapChainAdequate && anisotropySupported;
         }
 
         private VkSurfaceFormatKHR chooseSwapSurfaceFormat(VkSurfaceFormatKHR.Buffer formats) {
@@ -1538,6 +1583,8 @@ public class Ch00BaseCode {
         private void cleanup() {
             cleanupSwapChain();
 
+            VK10.vkDestroySampler(this.vkDevice, this.textureSampler, null);
+            VK10.vkDestroyImage(this.vkDevice, this.textureImageView, null);
             VK10.vkDestroyImage(this.vkDevice, this.textureImage, null);
             VK10.vkFreeMemory(this.vkDevice, this.textureImageMemory, null);
 

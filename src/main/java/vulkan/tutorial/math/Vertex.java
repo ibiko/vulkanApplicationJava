@@ -11,26 +11,32 @@ import org.lwjgl.vulkan.VkVertexInputBindingDescription;
 public class Vertex {
 
     public static final Vertex[] VERTICES = {
-            new Vertex(new Vector2f(-0.5f, -0.5f), new Vector3f(1.0f, 0.0f, 0.0f), new Vector2f(1.0f, 0.0f)),
-            new Vertex(new Vector2f(0.5f, -0.5f), new Vector3f(0.0f, 1.0f, 0.0f), new Vector2f(0.0f, 0.0f)),
-            new Vertex(new Vector2f(0.5f, 0.5f), new Vector3f(0.0f, 0.0f, 1.0f), new Vector2f(0.0f, 1.0f)),
-            new Vertex(new Vector2f(-0.5f, 0.5f), new Vector3f(1.0f, 1.0f, 1.0f), new Vector2f(1.0f, 1.0f))
+            new Vertex(new Vector3f(-0.5f, -0.5f, 0.0f), new Vector3f(1.0f, 0.0f, 0.0f), new Vector2f(1.0f, 0.0f)),
+            new Vertex(new Vector3f(0.5f, -0.5f, 0.0f), new Vector3f(0.0f, 1.0f, 0.0f), new Vector2f(0.0f, 0.0f)),
+            new Vertex(new Vector3f(0.5f, 0.5f, 0.0f), new Vector3f(0.0f, 0.0f, 1.0f), new Vector2f(0.0f, 1.0f)),
+            new Vertex(new Vector3f(-0.5f, 0.5f, 0.0f), new Vector3f(1.0f, 1.0f, 1.0f), new Vector2f(1.0f, 1.0f)),
+
+            new Vertex(new Vector3f(-0.5f, -0.5f, -0.5f), new Vector3f(1.0f, 0.0f, 0.0f), new Vector2f(1.0f, 0.0f)),
+            new Vertex(new Vector3f(0.5f, -0.5f, -0.5f), new Vector3f(0.0f, 1.0f, 0.0f), new Vector2f(0.0f, 0.0f)),
+            new Vertex(new Vector3f(0.5f, 0.5f, -0.5f), new Vector3f(0.0f, 0.0f, 1.0f), new Vector2f(0.0f, 1.0f)),
+            new Vertex(new Vector3f(-0.5f, 0.5f, -0.5f), new Vector3f(1.0f, 1.0f, 1.0f), new Vector2f(1.0f, 1.0f))
     };
 
     public static final /*uint16_t*/ short[] INDICES = {
-            0, 1, 2, 2, 3, 0
+            0, 1, 2, 2, 3, 0,
+            4, 5, 6, 6, 7, 4
     };
 
-    public static final int SIZEOF = (2 + 3 + 2) * Float.BYTES;
+    public static final int SIZEOF = (3 + 3 + 2) * Float.BYTES;
     public static final int OFFSETOF_POS = 0;
-    public static final int OFFSETOF_COLOR = 2 * Float.BYTES;
-    public static final int OFFSETOF_TEXTCOORDS = 5 * Float.BYTES;
+    public static final int OFFSETOF_COLOR = 3 * Float.BYTES;
+    public static final int OFFSETOF_TEXTCOORDS = 6 * Float.BYTES;
 
-    private final Vector2fc pos;
+    private final Vector3fc pos;
     private final Vector3fc color;
     private final Vector2fc texCoords;
 
-    public Vertex(Vector2fc pos, Vector3fc color, Vector2fc texCoords) {
+    public Vertex(Vector3fc pos, Vector3fc color, Vector2fc texCoords) {
         this.pos = pos;
         this.color = color;
         this.texCoords = texCoords;
@@ -52,7 +58,7 @@ public class Vertex {
         VkVertexInputAttributeDescription posDescription = attributeDescriptions.get(0);
         posDescription.binding(0);
         posDescription.location(0);
-        posDescription.format(VK10.VK_FORMAT_R32G32_SFLOAT);
+        posDescription.format(VK10.VK_FORMAT_R32G32B32_SFLOAT);
         posDescription.offset(OFFSETOF_POS);
 
         //Color
@@ -72,7 +78,7 @@ public class Vertex {
         return attributeDescriptions.rewind();
     }
 
-    public Vector2fc getPos() {
+    public Vector3fc getPos() {
         return this.pos;
     }
 

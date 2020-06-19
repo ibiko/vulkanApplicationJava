@@ -70,6 +70,10 @@ public class Ch00BaseCode {
         private long graphicsPipeline;
         private long commandPool;
 
+        private long depthImage;
+        private long depthImageMemory;
+        private long depthImageView;
+
         private long textureImage;
         private long textureImageMemory;
         private long textureImageView;
@@ -186,7 +190,7 @@ public class Ch00BaseCode {
         }
 
         private void createTextureImageView() {
-            this.textureImageView = createImageView(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB);
+            this.textureImageView = createImageView(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB, VK10.VK_IMAGE_ASPECT_COLOR_BIT);
         }
 
         private void createTextureImage() {
@@ -281,11 +285,22 @@ public class Ch00BaseCode {
                 barrier.srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED);
                 barrier.dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED);
                 barrier.image(image);
-                barrier.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+
                 barrier.subresourceRange().baseMipLevel(0);
                 barrier.subresourceRange().levelCount(1);
                 barrier.subresourceRange().baseArrayLayer(0);
                 barrier.subresourceRange().layerCount(1);
+
+                if(newLayout == VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL){
+                    barrier.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_DEPTH_BIT);
+
+                    if(hasStencilComponent(format)){
+                        barrier.subresourceRange().aspectMask(
+                                barrier.subresourceRange().aspectMask() | VK10.VK_IMAGE_ASPECT_STENCIL_BIT);
+                    }
+                }else{
+                    barrier.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                }
 
                 int sourceStage;
                 int destinationStage;
@@ -302,6 +317,12 @@ public class Ch00BaseCode {
 
                     sourceStage = VK10.VK_PIPELINE_STAGE_TRANSFER_BIT;
                     destinationStage = VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                } else if (oldLayout == VK10.VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+                    barrier.srcAccessMask(0);
+                    barrier.dstAccessMask(VK10.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK10.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+                    sourceStage = VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                    destinationStage = VK10.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
                 } else {
                     throw new IllegalArgumentException("Unsupported layout transition");
                 }
@@ -540,6 +561,7 @@ public class Ch00BaseCode {
             for (Vertex vertex : vertices) {
                 byteBuffer.putFloat(vertex.getPos().x());
                 byteBuffer.putFloat(vertex.getPos().y());
+                byteBuffer.putFloat(vertex.getPos().z());
 
                 byteBuffer.putFloat(vertex.getColor().x());
                 byteBuffer.putFloat(vertex.getColor().y());
@@ -577,11 +599,67 @@ public class Ch00BaseCode {
             createImageViews();
             createRenderPass();
             createGraphicsPipeline();
+            createDepthResources();
             createFrameBuffers();
             createUniformBuffers();
             createDescriptorPool();
             createDescriptorSets();
             createCommandBuffers();
+        }
+
+        private void createDepthResources() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                int depthFormat = findDepthFormat();
+
+                LongBuffer pDepthImage = stack.mallocLong(1);
+                LongBuffer pDepthImageMemory = stack.mallocLong(1);
+
+                createImage(this.swapChainExtent.width(), this.swapChainExtent.height(),
+                        depthFormat,
+                        VK10.VK_IMAGE_TILING_OPTIMAL,
+                        VK10.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                        VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        pDepthImage,
+                        pDepthImageMemory);
+
+                this.depthImage = pDepthImage.get(0);
+                this.depthImageMemory = pDepthImageMemory.get(0);
+
+                this.depthImageView = createImageView(this.depthImage, depthFormat, VK10.VK_IMAGE_ASPECT_DEPTH_BIT);
+
+                //Explicitly transitioning the depth image
+                transitionImageLayout(this.depthImage, depthFormat,
+                        VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            }
+        }
+
+        private int findDepthFormat() {
+            return findSupportedFormat(
+                    MemoryStack.stackGet().ints(VK10.VK_FORMAT_D32_SFLOAT, VK10.VK_FORMAT_D32_SFLOAT_S8_UINT, VK10.VK_FORMAT_D24_UNORM_S8_UINT),
+                    VK10.VK_IMAGE_TILING_OPTIMAL,
+                    VK10.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+        }
+
+        private int findSupportedFormat(IntBuffer formatCandidates, int tiling, int features) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkFormatProperties properties = VkFormatProperties.callocStack(stack);
+                for (int i = 0; i < formatCandidates.capacity(); i++) {
+                    int format = formatCandidates.get(i);
+                    VK10.vkGetPhysicalDeviceFormatProperties(this.vkPhysicalDevice, format, properties);
+
+                    if (tiling == VK10.VK_IMAGE_TILING_LINEAR && (properties.linearTilingFeatures() & features) == features) {
+                        return format;
+                    } else if (tiling == VK10.VK_IMAGE_TILING_OPTIMAL && (properties.optimalTilingFeatures() & features) == features) {
+                        return format;
+                    }
+                }
+            }
+
+            throw new RuntimeException("Failed to find supported format");
+        }
+
+        private boolean hasStencilComponent(int format) {
+            return format == VK10.VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK10.VK_FORMAT_D24_UNORM_S8_UINT;
         }
 
         private void createDescriptorSets() {
@@ -706,7 +784,6 @@ public class Ch00BaseCode {
             this.inFlightFrames = new ArrayList<>(MAX_FRAMES_IN_FLIGHT);
             this.imagesInFlight = new HashMap<>(this.swapChainImages.size());
 
-
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkSemaphoreCreateInfo semaphoreCreateInfo = VkSemaphoreCreateInfo.callocStack(stack);
                 semaphoreCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
@@ -761,8 +838,11 @@ public class Ch00BaseCode {
                 renderArea.offset(VkOffset2D.callocStack(stack).set(0, 0));
                 renderArea.extent(this.swapChainExtent);
                 renderPassInfo.renderArea(renderArea);
-                VkClearValue.Buffer clearValues = VkClearValue.callocStack(1, stack);
-                clearValues.color().float32(stack.floats(0.0f, 0.0f, 0.0f, 1.0f));
+
+                VkClearValue.Buffer clearValues = VkClearValue.callocStack(2, stack);
+                clearValues.get(0).color().float32(stack.floats(0.0f, 0.0f, 0.0f, 1.0f));
+                clearValues.get(1).depthStencil().set(1.0f, 0);
+
                 renderPassInfo.pClearValues(clearValues);
 
                 for (int i = 0; i < commandBuffersCount; i++) {
@@ -818,7 +898,7 @@ public class Ch00BaseCode {
         private void createFrameBuffers() {
             this.swapChainFrameBuffers = new ArrayList<>(this.swapChainImageViews.size());
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                LongBuffer attachments = stack.mallocLong(1);
+                LongBuffer attachments = stack.longs(VK10.VK_NULL_HANDLE, this.depthImageView);
                 LongBuffer pFrameBuffer = stack.mallocLong(1);
 
                 //Lets allocate the create info struct once and just update the pAttachments field each iteration
@@ -845,7 +925,12 @@ public class Ch00BaseCode {
 
         private void createRenderPass() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.callocStack(1, stack);
+                VkAttachmentDescription.Buffer attachments = VkAttachmentDescription.callocStack(2, stack);
+                VkAttachmentReference.Buffer attachmentRefs = VkAttachmentReference.callocStack(2, stack);
+
+                //Color attachments
+
+                VkAttachmentDescription colorAttachment = attachments.get(0);
                 colorAttachment.format(this.swapChainImageFormat);
                 colorAttachment.samples(VK10.VK_SAMPLE_COUNT_1_BIT);
                 colorAttachment.loadOp(VK10.VK_ATTACHMENT_LOAD_OP_CLEAR);
@@ -855,14 +940,33 @@ public class Ch00BaseCode {
                 colorAttachment.initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
                 colorAttachment.finalLayout(KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-                VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.callocStack(1, stack);
+                VkAttachmentReference colorAttachmentRef = attachmentRefs.get(0);
                 colorAttachmentRef.attachment(0);
                 colorAttachmentRef.layout(VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+                //Depth-Stencil attachments
+
+                VkAttachmentDescription depthAttachment = attachments.get(1);
+                depthAttachment.format(findDepthFormat());
+                depthAttachment.samples(VK10.VK_SAMPLE_COUNT_1_BIT);
+                depthAttachment.loadOp(VK10.VK_ATTACHMENT_LOAD_OP_CLEAR);
+                depthAttachment.storeOp(VK10.VK_ATTACHMENT_STORE_OP_DONT_CARE);
+                depthAttachment.stencilLoadOp(VK10.VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+                depthAttachment.stencilStoreOp(VK10.VK_ATTACHMENT_STORE_OP_DONT_CARE);
+                depthAttachment.initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
+                depthAttachment.finalLayout(VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+                VkAttachmentReference depthAttachmentRef = attachmentRefs.get(1);
+                depthAttachmentRef.attachment(1);
+                depthAttachmentRef.layout(VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+                //Attachments end
 
                 VkSubpassDescription.Buffer subpass = VkSubpassDescription.callocStack(1, stack);
                 subpass.pipelineBindPoint(VK10.VK_PIPELINE_BIND_POINT_GRAPHICS);
                 subpass.colorAttachmentCount(1);
-                subpass.pColorAttachments(colorAttachmentRef);
+                subpass.pColorAttachments(VkAttachmentReference.callocStack(1, stack).put(0, colorAttachmentRef));
+                subpass.pDepthStencilAttachment(depthAttachmentRef);
 
                 VkSubpassDependency.Buffer dependency = VkSubpassDependency.callocStack(1, stack);
                 dependency.srcSubpass(VK10.VK_SUBPASS_EXTERNAL);
@@ -874,7 +978,7 @@ public class Ch00BaseCode {
 
                 VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.callocStack(stack);
                 renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
-                renderPassInfo.pAttachments(colorAttachment);
+                renderPassInfo.pAttachments(attachments);
                 renderPassInfo.pSubpasses(subpass);
                 renderPassInfo.pDependencies(dependency);
 
@@ -961,6 +1065,17 @@ public class Ch00BaseCode {
                 multisampling.sampleShadingEnable(false);
                 multisampling.rasterizationSamples(VK10.VK_SAMPLE_COUNT_1_BIT);
 
+                // ===> DEPTH-STENCIL TESTING <===
+                VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.callocStack(stack);
+                depthStencil.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
+                depthStencil.depthTestEnable(true);
+                depthStencil.depthWriteEnable(true);
+                depthStencil.depthCompareOp(VK10.VK_COMPARE_OP_LESS);
+                depthStencil.depthBoundsTestEnable(false);
+                depthStencil.minDepthBounds(0.0f); //Optional
+                depthStencil.maxDepthBounds(1.0f); //Optional
+                depthStencil.stencilTestEnable(false);
+
                 // ===> COLOR BLENDING <===
                 VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachmentStates = VkPipelineColorBlendAttachmentState.callocStack(1, stack);
                 colorBlendAttachmentStates.colorWriteMask(VK10.VK_COLOR_COMPONENT_R_BIT | VK10.VK_COLOR_COMPONENT_G_BIT | VK10.VK_COLOR_COMPONENT_B_BIT | VK10.VK_COLOR_COMPONENT_A_BIT);
@@ -994,6 +1109,7 @@ public class Ch00BaseCode {
                 pipelineCreateInfos.pViewportState(viewportState);
                 pipelineCreateInfos.pRasterizationState(rasterizer);
                 pipelineCreateInfos.pMultisampleState(multisampling);
+                pipelineCreateInfos.pDepthStencilState(depthStencil);
                 pipelineCreateInfos.pColorBlendState(colorBlendStateCreateInfo);
                 pipelineCreateInfos.layout(this.pipelineLayout);
                 pipelineCreateInfos.renderPass(this.renderPass);
@@ -1038,11 +1154,11 @@ public class Ch00BaseCode {
         private void createImageViews() {
             this.swapChainImageViews = new ArrayList<>(this.swapChainImages.size());
             for (long swapChainImage : this.swapChainImages) {
-                this.swapChainImageViews.add(createImageView(swapChainImage, this.swapChainImageFormat));
+                this.swapChainImageViews.add(createImageView(swapChainImage, this.swapChainImageFormat, VK10.VK_IMAGE_ASPECT_COLOR_BIT));
             }
         }
 
-        private Long createImageView(long image, int format) {
+        private Long createImageView(long image, int format, int aspactFlags) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
 
                 VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.callocStack(stack);
@@ -1051,13 +1167,8 @@ public class Ch00BaseCode {
                 createInfo.image(image);
                 createInfo.viewType(VK10.VK_IMAGE_VIEW_TYPE_2D);
                 createInfo.format(format);
-//
-//                createInfo.components().r(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
-//                createInfo.components().g(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
-//                createInfo.components().b(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
-//                createInfo.components().a(VK10.VK_COMPONENT_SWIZZLE_IDENTITY);
 
-                createInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                createInfo.subresourceRange().aspectMask(aspactFlags);
                 createInfo.subresourceRange().baseMipLevel(0);
                 createInfo.subresourceRange().levelCount(1);
                 createInfo.subresourceRange().baseArrayLayer(0);
@@ -1600,6 +1711,10 @@ public class Ch00BaseCode {
         }
 
         private void cleanupSwapChain() {
+            VK10.vkDestroyImageView(this.vkDevice, this.depthImageView, null);
+            VK10.vkDestroyImage(this.vkDevice, this.depthImage, null);
+            VK10.vkFreeMemory(this.vkDevice, this.depthImageMemory, null);
+
             this.uniformBuffers.forEach(uniformBuffer -> VK10.vkDestroyBuffer(this.vkDevice, uniformBuffer, null));
             this.uniformBuffersMemory.forEach(uniformBufferMemory -> VK10.vkFreeMemory(this.vkDevice, uniformBufferMemory, null));
 

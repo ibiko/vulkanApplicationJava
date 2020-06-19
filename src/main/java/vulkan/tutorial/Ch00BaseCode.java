@@ -1,6 +1,9 @@
 package vulkan.tutorial;
 
+import org.joml.Vector3f;
+import org.joml.Vector3fc;
 import org.lwjgl.PointerBuffer;
+import org.lwjgl.assimp.Assimp;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.stb.STBImage;
@@ -10,8 +13,10 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.*;
 import vulkan.tutorial.math.Vertex;
+import vulkan.tutorial.mesh.Model;
 import vulkan.tutorial.shader.*;
 
+import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -78,6 +83,9 @@ public class Ch00BaseCode {
         private long textureImageMemory;
         private long textureImageView;
         private long textureSampler;
+
+        private Vertex[] vertices;
+        private int[] indices;
 
         private long vertexBuffer;
         private long vertexBufferMemory;
@@ -155,11 +163,37 @@ public class Ch00BaseCode {
             createTextureImage();
             createTextureImageView();
             createTextureSampler();
+            loadModel();
             createVertexBuffer();
             createIndexBuffer();
             createDescriptorSetLayout();
             createSwapChainObjects();
             createSyncObjects();
+        }
+
+        private void loadModel() {
+            File modelFile = new File(ClassLoader.getSystemClassLoader().getResource("models/chalet.obj").getFile());
+            Model model = ModelLoader.loadModel(modelFile, Assimp.aiProcess_FlipUVs | Assimp.aiProcess_DropNormals);
+
+            final int vertexCount = model.getPositions().size();
+
+            this.vertices = new Vertex[vertexCount];
+
+            final Vector3fc color = new Vector3f(1.0f, 1.0f, 1.0f);
+
+            for (int i = 0; i < vertexCount; i++) {
+                this.vertices[i] = new Vertex(
+                        model.getPositions().get(i),
+                        color,
+                        model.getTexCoords().get(i)
+                );
+            }
+
+            this.indices = new int[model.getIndices().size()];
+
+            for (int i = 0; i < this.indices.length; i++) {
+                this.indices[i] = model.getIndices().get(i);
+            }
         }
 
         private void createTextureSampler() {
@@ -195,7 +229,7 @@ public class Ch00BaseCode {
 
         private void createTextureImage() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                String filename = ClassLoader.getSystemClassLoader().getResource("textures/texture.jpg").getPath();
+                String filename = ClassLoader.getSystemClassLoader().getResource("textures/chalet.jpg").getPath();
 
                 IntBuffer pWidth = stack.mallocInt(1);
                 IntBuffer pHeight = stack.mallocInt(1);
@@ -291,14 +325,14 @@ public class Ch00BaseCode {
                 barrier.subresourceRange().baseArrayLayer(0);
                 barrier.subresourceRange().layerCount(1);
 
-                if(newLayout == VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL){
+                if (newLayout == VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
                     barrier.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_DEPTH_BIT);
 
-                    if(hasStencilComponent(format)){
+                    if (hasStencilComponent(format)) {
                         barrier.subresourceRange().aspectMask(
                                 barrier.subresourceRange().aspectMask() | VK10.VK_IMAGE_ASPECT_STENCIL_BIT);
                     }
-                }else{
+                } else {
                     barrier.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
                 }
 
@@ -404,7 +438,7 @@ public class Ch00BaseCode {
 
         private void createIndexBuffer() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                long bufferSize = Short.BYTES * Vertex.INDICES.length;
+                long bufferSize = Integer.BYTES * this.indices.length;
 
                 LongBuffer pBuffer = stack.mallocLong(1);
                 LongBuffer pBufferMemory = stack.mallocLong(1);
@@ -422,7 +456,7 @@ public class Ch00BaseCode {
 
                 VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
                 {
-                    memcpy(data.getByteBuffer(0, (int) bufferSize), Vertex.INDICES);
+                    memcpy(data.getByteBuffer(0, (int) bufferSize), this.indices);
                 }
                 VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -444,7 +478,7 @@ public class Ch00BaseCode {
 
         private void createVertexBuffer() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                long bufferSize = Vertex.SIZEOF * Vertex.VERTICES.length;
+                long bufferSize = Vertex.SIZEOF * this.vertices.length;
 
                 LongBuffer pBuffer = stack.mallocLong(1);
                 LongBuffer pBufferMemory = stack.mallocLong(1);
@@ -460,7 +494,7 @@ public class Ch00BaseCode {
 
                 VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
                 {
-                    memcpy(data.getByteBuffer(0, (int) bufferSize), Vertex.VERTICES);
+                    memcpy(data.getByteBuffer(0, (int) bufferSize), this.vertices);
                 }
                 VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -572,9 +606,9 @@ public class Ch00BaseCode {
             }
         }
 
-        private void memcpy(ByteBuffer byteBuffer, short[] indices) {
-            for (short index : indices) {
-                byteBuffer.putShort(index);
+        private void memcpy(ByteBuffer byteBuffer, int[] indices) {
+            for (int index : indices) {
+                byteBuffer.putInt(index);
             }
 
             byteBuffer.rewind();
@@ -861,12 +895,12 @@ public class Ch00BaseCode {
                         LongBuffer vertexBuffers = stack.longs(this.vertexBuffer);
                         LongBuffer offsets = stack.longs(0);
                         VK10.vkCmdBindVertexBuffers(commandBuffer, 0, vertexBuffers, offsets);
-                        VK10.vkCmdBindIndexBuffer(commandBuffer, this.indexBuffer, 0, VK10.VK_INDEX_TYPE_UINT16);
+                        VK10.vkCmdBindIndexBuffer(commandBuffer, this.indexBuffer, 0, VK10.VK_INDEX_TYPE_UINT32);
 
                         VK10.vkCmdBindDescriptorSets(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 this.pipelineLayout, 0, stack.longs(this.descriptorSets.get(i)), null);
 
-                        VK10.vkCmdDrawIndexed(commandBuffer, Vertex.INDICES.length, 1, 0, 0, 0);
+                        VK10.vkCmdDrawIndexed(commandBuffer, this.indices.length, 1, 0, 0, 0);
                     }
                     VK10.vkCmdEndRenderPass(commandBuffer);
 

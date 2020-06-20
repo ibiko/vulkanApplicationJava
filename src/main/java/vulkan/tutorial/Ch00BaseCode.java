@@ -79,6 +79,7 @@ public class Ch00BaseCode {
         private long depthImageMemory;
         private long depthImageView;
 
+        private int mipLevels;
         private long textureImage;
         private long textureImageMemory;
         private long textureImageView;
@@ -212,6 +213,9 @@ public class Ch00BaseCode {
                 samplerCreateInfo.compareEnable(false);
                 samplerCreateInfo.compareOp(VK10.VK_COMPARE_OP_ALWAYS);
                 samplerCreateInfo.mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_LINEAR);
+                samplerCreateInfo.minLod(0); //Optional
+                samplerCreateInfo.maxLod((float) this.mipLevels);
+                samplerCreateInfo.mipLodBias(0); //Optional
 
                 LongBuffer pTextureSampler = stack.mallocLong(1);
 
@@ -224,7 +228,7 @@ public class Ch00BaseCode {
         }
 
         private void createTextureImageView() {
-            this.textureImageView = createImageView(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB, VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+            this.textureImageView = createImageView(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB, VK10.VK_IMAGE_ASPECT_COLOR_BIT, this.mipLevels);
         }
 
         private void createTextureImage() {
@@ -238,6 +242,8 @@ public class Ch00BaseCode {
                 ByteBuffer pixels = STBImage.stbi_load(filename, pWidth, pHeight, pChannels, STBImage.STBI_rgb_alpha);
 
                 long imageSize = pWidth.get(0) * pHeight.get(0) * 4;//pChannels.get(0); //always 4 due to STBI_rgb_alpha
+
+                this.mipLevels = (int) Math.floor(log2(Math.max(pWidth.get(0), pHeight.get(0)))) + 1;
 
                 if (pixels == null) {
                     throw new RuntimeException("Failed to load texture image " + filename);
@@ -263,29 +269,133 @@ public class Ch00BaseCode {
                 LongBuffer pTextureImage = stack.mallocLong(1);
                 LongBuffer pTextureImageMemory = stack.mallocLong(1);
 
-                createImage(pWidth.get(0), pHeight.get(0),
+                createImage(pWidth.get(0),
+                        pHeight.get(0),
                         VK10.VK_FORMAT_R8G8B8A8_SRGB, VK10.VK_IMAGE_TILING_OPTIMAL,
-                        VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT,
+                        VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT,
                         VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                         pTextureImage,
-                        pTextureImageMemory);
+                        pTextureImageMemory,
+                        this.mipLevels);
 
                 this.textureImage = pTextureImage.get(0);
                 this.textureImageMemory = pTextureImageMemory.get(0);
 
                 transitionImageLayout(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB,
                         VK10.VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                        VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        this.mipLevels);
 
                 copyBufferToImage(pStagingBuffer.get(0), this.textureImage, pWidth.get(0), pHeight.get(0));
 
-                transitionImageLayout(this.textureImage,
-                        VK10.VK_FORMAT_R8G8B8A8_SRGB,
-                        VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                //Transitioned to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL while generating mipmaps
+                generateMipmaps(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB, pWidth.get(0), pHeight.get(0), this.mipLevels);
 
                 VK10.vkDestroyBuffer(this.vkDevice, pStagingBuffer.get(0), null);
                 VK10.vkFreeMemory(this.vkDevice, pStagingBufferMemory.get(0), null);
+            }
+        }
+
+        private void generateMipmaps(long image, int imageFormat, int width, int height, int mipMapLevels) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                //Check if image format supports linear blitting
+                VkFormatProperties formatProperties = VkFormatProperties.mallocStack(stack);
+                VK10.vkGetPhysicalDeviceFormatProperties(this.vkPhysicalDevice, imageFormat, formatProperties);
+
+                if ((formatProperties.optimalTilingFeatures() & VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0) {
+                    throw new RuntimeException("Texture image format does not support linear blitting");
+                }
+
+                VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+                VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.callocStack(1, stack);
+                barrier.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+                barrier.image(image);
+                barrier.srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED);
+                barrier.dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED);
+                barrier.dstAccessMask(VK10.VK_QUEUE_FAMILY_IGNORED);
+                barrier.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                barrier.subresourceRange().baseArrayLayer(0);
+                barrier.subresourceRange().layerCount(1);
+                barrier.subresourceRange().levelCount(1);
+
+                int mipWidth = width;
+                int mipHeight = height;
+
+                for (int i = 1; i < mipMapLevels; i++) {
+                    barrier.subresourceRange().baseMipLevel(i - 1);
+                    barrier.oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                    barrier.newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                    barrier.srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT);
+                    barrier.dstAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT);
+
+                    VK10.vkCmdPipelineBarrier(commandBuffer,
+                            VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            0,
+                            null,
+                            null,
+                            barrier);
+
+                    VkImageBlit.Buffer blit = VkImageBlit.callocStack(1, stack);
+                    blit.srcOffsets(0).set(0, 0, 0);
+                    blit.srcOffsets(1).set(mipWidth, mipHeight, 1);
+                    blit.srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                    blit.srcSubresource().mipLevel(i - 1);
+                    blit.srcSubresource().baseArrayLayer(0);
+                    blit.srcSubresource().layerCount(1);
+                    blit.dstOffsets(0).set(0, 0, 0);
+                    blit.dstOffsets(1).set(mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1);
+                    blit.dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                    blit.dstSubresource().mipLevel(i);
+                    blit.dstSubresource().baseArrayLayer(0);
+                    blit.dstSubresource().layerCount(1);
+
+                    VK10.vkCmdBlitImage(commandBuffer,
+                            image,
+                            VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            image,
+                            VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            blit,
+                            VK10.VK_FILTER_LINEAR);
+
+                    barrier.oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                    barrier.newLayout(VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    barrier.srcAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT);
+                    barrier.dstAccessMask(VK10.VK_ACCESS_SHADER_WRITE_BIT);
+
+                    VK10.vkCmdPipelineBarrier(commandBuffer,
+                            VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            0,
+                            null,
+                            null,
+                            barrier);
+
+                    if (mipWidth > 1) {
+                        mipWidth /= 2;
+                    }
+
+                    if (mipHeight > 1) {
+                        mipHeight /= 2;
+                    }
+                }
+
+                barrier.subresourceRange().baseMipLevel(mipMapLevels - 1);
+                barrier.oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                barrier.newLayout(VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                barrier.srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT);
+                barrier.dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT);
+
+                VK10.vkCmdPipelineBarrier(commandBuffer,
+                        VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        0,
+                        null,
+                        null,
+                        barrier);
+
+                endSingleTimeCommands(commandBuffer);
             }
         }
 
@@ -310,7 +420,7 @@ public class Ch00BaseCode {
             }
         }
 
-        private void transitionImageLayout(long image, int format, int oldLayout, int newLayout) {
+        private void transitionImageLayout(long image, int format, int oldLayout, int newLayout, int mipMapLevels) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.callocStack(1, stack);
                 barrier.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
@@ -321,7 +431,7 @@ public class Ch00BaseCode {
                 barrier.image(image);
 
                 barrier.subresourceRange().baseMipLevel(0);
-                barrier.subresourceRange().levelCount(1);
+                barrier.subresourceRange().levelCount(mipMapLevels);
                 barrier.subresourceRange().baseArrayLayer(0);
                 barrier.subresourceRange().layerCount(1);
 
@@ -373,7 +483,7 @@ public class Ch00BaseCode {
             }
         }
 
-        private void createImage(int width, int height, int format, int tiling, int usage, int memProperties, LongBuffer pTextureImage, LongBuffer pTextureImageMemory) {
+        private void createImage(int width, int height, int format, int tiling, int usage, int memProperties, LongBuffer pTextureImage, LongBuffer pTextureImageMemory, int mipMapLevels) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkImageCreateInfo imageInfo = VkImageCreateInfo.callocStack(stack);
                 imageInfo.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
@@ -381,7 +491,7 @@ public class Ch00BaseCode {
                 imageInfo.extent().width(width);
                 imageInfo.extent().height(height);
                 imageInfo.extent().depth(1);
-                imageInfo.mipLevels(1);
+                imageInfo.mipLevels(mipMapLevels);
                 imageInfo.arrayLayers(1);
                 imageInfo.format(format);
                 imageInfo.tiling(tiling);
@@ -648,22 +758,27 @@ public class Ch00BaseCode {
                 LongBuffer pDepthImage = stack.mallocLong(1);
                 LongBuffer pDepthImageMemory = stack.mallocLong(1);
 
-                createImage(this.swapChainExtent.width(), this.swapChainExtent.height(),
+                createImage(this.swapChainExtent.width(),
+                        this.swapChainExtent.height(),
                         depthFormat,
                         VK10.VK_IMAGE_TILING_OPTIMAL,
                         VK10.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                         VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                         pDepthImage,
-                        pDepthImageMemory);
+                        pDepthImageMemory,
+                        1);
 
                 this.depthImage = pDepthImage.get(0);
                 this.depthImageMemory = pDepthImageMemory.get(0);
 
-                this.depthImageView = createImageView(this.depthImage, depthFormat, VK10.VK_IMAGE_ASPECT_DEPTH_BIT);
+                this.depthImageView = createImageView(this.depthImage, depthFormat, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 
                 //Explicitly transitioning the depth image
-                transitionImageLayout(this.depthImage, depthFormat,
-                        VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                transitionImageLayout(this.depthImage,
+                        depthFormat,
+                        VK10.VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                        1);
             }
         }
 
@@ -1188,11 +1303,11 @@ public class Ch00BaseCode {
         private void createImageViews() {
             this.swapChainImageViews = new ArrayList<>(this.swapChainImages.size());
             for (long swapChainImage : this.swapChainImages) {
-                this.swapChainImageViews.add(createImageView(swapChainImage, this.swapChainImageFormat, VK10.VK_IMAGE_ASPECT_COLOR_BIT));
+                this.swapChainImageViews.add(createImageView(swapChainImage, this.swapChainImageFormat, VK10.VK_IMAGE_ASPECT_COLOR_BIT, 1));
             }
         }
 
-        private Long createImageView(long image, int format, int aspactFlags) {
+        private Long createImageView(long image, int format, int aspactFlags, int mipMapLevels) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
 
                 VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.callocStack(stack);
@@ -1204,7 +1319,7 @@ public class Ch00BaseCode {
 
                 createInfo.subresourceRange().aspectMask(aspactFlags);
                 createInfo.subresourceRange().baseMipLevel(0);
-                createInfo.subresourceRange().levelCount(1);
+                createInfo.subresourceRange().levelCount(mipMapLevels);
                 createInfo.subresourceRange().baseArrayLayer(0);
                 createInfo.subresourceRange().layerCount(1);
 
@@ -1742,6 +1857,10 @@ public class Ch00BaseCode {
             uniformBufferObject.getModel().get(0, byteBuffer);
             uniformBufferObject.getView().get(AligmentUtils.alignas(mat4size, AligmentUtils.alignof(uniformBufferObject.getView())), byteBuffer);
             uniformBufferObject.getProj().get(AligmentUtils.alignas(mat4size * 2, AligmentUtils.alignof(uniformBufferObject.getView())), byteBuffer);
+        }
+
+        private double log2(double value) {
+            return Math.log(value) / Math.log(2);
         }
 
         private void cleanupSwapChain() {

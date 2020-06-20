@@ -16,6 +16,7 @@ import java.util.logging.Logger;
 
 public class ModelLoader {
     public static Model loadModel(File file, int flags) {
+        //TODO check if you refactor the processNode code if the try with resources can work
         AIScene scene = Assimp.aiImportFile(file.getAbsolutePath(), flags);
         Logger logger = Logger.getLogger(ModelLoader.class.getSimpleName());
         logger.info("Loading model " + file.getPath() + "...");

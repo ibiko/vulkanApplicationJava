@@ -20,7 +20,7 @@ import java.util.Map;
  * a mat4 matrix must have the same alignment as vec4.
  *
  */
-public class AligmentUtils {
+public class AlignmentUtils {
 
     private static final Map<Class<?>, Integer> SIZEOF_CACHE = new HashMap<>();
 
@@ -40,7 +40,7 @@ public class AligmentUtils {
         SIZEOF_CACHE.put(Matrix4f.class, SIZEOF_CACHE.get(Vector4f.class));
     }
 
-    private AligmentUtils() {
+    private AlignmentUtils() {
         //do nothing
     }
 
@@ -48,11 +48,11 @@ public class AligmentUtils {
         return obj == null ? 0 : SIZEOF_CACHE.getOrDefault(obj.getClass(), 0);
     }
 
-    public static int alignof(Object obj) {
+    public static int alignOf(Object obj) {
         return obj == null ? 0 : SIZEOF_CACHE.getOrDefault(obj.getClass(), Integer.BYTES);
     }
 
-    public static int alignas(int offset, int alignment) {
+    public static int alignAs(int offset, int alignment) {
         return offset % alignment == 0 ? offset : ((offset - 1) | (alignment - 1)) + 1;
     }
 }

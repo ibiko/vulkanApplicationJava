@@ -5,14 +5,14 @@ import org.joml.Matrix4f;
 public class UniformBufferObject {
     public static final int SIZEOF = 3 * 16 * Float.BYTES;
 
-    private Matrix4f model;
-    private Matrix4f view;
-    private Matrix4f proj;
+    private final Matrix4f model;
+    private final Matrix4f view;
+    private final Matrix4f projection;
 
     public UniformBufferObject() {
         this.model = new Matrix4f();
         this.view = new Matrix4f();
-        this.proj = new Matrix4f();
+        this.projection = new Matrix4f();
     }
 
     public Matrix4f getModel() {
@@ -23,8 +23,8 @@ public class UniformBufferObject {
         return this.view;
     }
 
-    public Matrix4f getProj() {
-        return this.proj;
+    public Matrix4f getProjection() {
+        return this.projection;
     }
 
 }

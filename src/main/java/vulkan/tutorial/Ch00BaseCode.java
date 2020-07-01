@@ -446,6 +446,12 @@ public class Ch00BaseCode {
             return queueCreateInfos;
         }
 
+        private static void memcpy(ByteBuffer dst, ByteBuffer src, long size) {
+            src.limit((int) size);
+            dst.put(src);
+            src.limit(src.capacity()).rewind();
+        }
+
         public void run() {
             initWindow();
             initVulkan();
@@ -461,7 +467,7 @@ public class Ch00BaseCode {
             GLFW.glfwWindowHint(GLFW.GLFW_CLIENT_API, GLFW.GLFW_NO_API);
             GLFW.glfwWindowHint(GLFW.GLFW_RESIZABLE, GLFW.GLFW_TRUE);
 
-            String title = getClass().getEnclosingClass().getSimpleName();
+            String title = "Java-jwgl-Vulkan-Rendering";
 
             this.window = GLFW.glfwCreateWindow(WIDTH, HEIGHT, title, MemoryUtil.NULL, MemoryUtil.NULL);
 
@@ -486,11 +492,20 @@ public class Ch00BaseCode {
             this.debugMessenger = setupDebugMessenger(this.vkInstance);
             this.surface = createSurface(this.vkInstance, this.window);
             this.vkPhysicalDevice = pickPhysicalDevice(this.vkInstance, this.surface);
+
+            //TODO :: test how multisampling is efecting the fps :: ibikov
             this.msaaSamples = findMaxUsableSampleCount(this.vkPhysicalDevice);
-            createLogicalDevice(this.vkPhysicalDevice, this.surface);
-            createCommandPool();
+
+            QueueFamilyIndices queueFamilyIndices = findQueueFamilies(this.vkPhysicalDevice, this.surface);
+
+            this.vkDevice = createLogicalDevice(this.vkPhysicalDevice, queueFamilyIndices);
+            this.vkGraphicsQueue = createGraphicsQueue(this.vkDevice, queueFamilyIndices);
+            this.vkPresentQueue = createPresentationQueue(this.vkDevice, queueFamilyIndices);
+            this.commandPool = createCommandPool(this.vkDevice, queueFamilyIndices);
+
             createTextureImage();
             createTextureImageView();
+
             this.textureSampler = createTextureSampler(this.vkDevice, this.mipLevels);
             loadModel();
             createVertexBuffer();
@@ -567,7 +582,7 @@ public class Ch00BaseCode {
                 LongBuffer pTextureImage = stack.mallocLong(1);
                 LongBuffer pTextureImageMemory = stack.mallocLong(1);
 
-                createImage(pWidth.get(0),
+                createImage(this.vkDevice, this.vkPhysicalDevice, pWidth.get(0),
                         pHeight.get(0),
                         VK10.VK_FORMAT_R8G8B8A8_SRGB, VK10.VK_IMAGE_TILING_OPTIMAL,
                         VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -579,7 +594,7 @@ public class Ch00BaseCode {
                 this.textureImage = pTextureImage.get(0);
                 this.textureImageMemory = pTextureImageMemory.get(0);
 
-                transitionImageLayout(this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB,
+                transitionImageLayout(this.vkDevice, this.commandPool, this.vkGraphicsQueue, this.textureImage, VK10.VK_FORMAT_R8G8B8A8_SRGB,
                         VK10.VK_IMAGE_LAYOUT_UNDEFINED,
                         VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         this.mipLevels);
@@ -604,7 +619,7 @@ public class Ch00BaseCode {
                     throw new RuntimeException("Texture image format does not support linear blitting");
                 }
 
-                VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+                VkCommandBuffer commandBuffer = beginSingleTimeCommands(this.vkDevice, this.commandPool);
 
                 VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.callocStack(1, stack);
                 barrier.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
@@ -693,13 +708,13 @@ public class Ch00BaseCode {
                         null,
                         barrier);
 
-                endSingleTimeCommands(commandBuffer);
+                endSingleTimeCommands(commandBuffer, this.vkDevice, this.commandPool, this.vkGraphicsQueue);
             }
         }
 
         private void copyBufferToImage(long buffer, long image, int width, int height) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+                VkCommandBuffer commandBuffer = beginSingleTimeCommands(this.vkDevice, this.commandPool);
 
                 VkBufferImageCopy.Buffer region = VkBufferImageCopy.callocStack(1, stack);
                 region.bufferOffset(0);
@@ -714,11 +729,11 @@ public class Ch00BaseCode {
 
                 VK10.vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
 
-                endSingleTimeCommands(commandBuffer);
+                endSingleTimeCommands(commandBuffer, this.vkDevice, this.commandPool, this.vkGraphicsQueue);
             }
         }
 
-        private void transitionImageLayout(long image, int format, int oldLayout, int newLayout, int mipMapLevels) {
+        private static void transitionImageLayout(VkDevice vkDevice, long commandPool, VkQueue vkGraphicsQueue, long image, int format, int oldLayout, int newLayout, int mipMapLevels) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.callocStack(1, stack);
                 barrier.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
@@ -775,7 +790,7 @@ public class Ch00BaseCode {
                     throw new IllegalArgumentException("Unsupported layout transition");
                 }
 
-                VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+                VkCommandBuffer commandBuffer = beginSingleTimeCommands(vkDevice, commandPool);
 
                 VK10.vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage,
                         0,
@@ -783,11 +798,11 @@ public class Ch00BaseCode {
                         null,
                         barrier);
 
-                endSingleTimeCommands(commandBuffer);
+                endSingleTimeCommands(commandBuffer, vkDevice, commandPool, vkGraphicsQueue);
             }
         }
 
-        private void createImage(int width, int height, int format, int tiling, int usage, int memProperties, LongBuffer pTextureImage, LongBuffer pTextureImageMemory, int mipMapLevels, int msaaSamplesNum) {
+        private static void createImage(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, int width, int height, int format, int tiling, int usage, int memProperties, LongBuffer pTextureImage, LongBuffer pTextureImageMemory, int mipMapLevels, int msaaSamplesNum) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkImageCreateInfo imageInfo = VkImageCreateInfo.callocStack(stack);
                 imageInfo.sType(VK10.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
@@ -804,30 +819,24 @@ public class Ch00BaseCode {
                 imageInfo.samples(msaaSamplesNum);
                 imageInfo.sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
 
-                if (VK10.vkCreateImage(this.vkDevice, imageInfo, null, pTextureImage) != VK10.VK_SUCCESS) {
+                if (VK10.vkCreateImage(vkDevice, imageInfo, null, pTextureImage) != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Failed to create image");
                 }
 
                 VkMemoryRequirements memoryRequirements = VkMemoryRequirements.mallocStack(stack);
-                VK10.vkGetImageMemoryRequirements(this.vkDevice, pTextureImage.get(0), memoryRequirements);
+                VK10.vkGetImageMemoryRequirements(vkDevice, pTextureImage.get(0), memoryRequirements);
 
                 VkMemoryAllocateInfo allocateInfo = VkMemoryAllocateInfo.callocStack(stack);
                 allocateInfo.sType(VK10.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
                 allocateInfo.allocationSize(memoryRequirements.size());
-                allocateInfo.memoryTypeIndex(findMemoryType(memoryRequirements.memoryTypeBits(), memProperties));
+                allocateInfo.memoryTypeIndex(findMemoryType(memoryRequirements.memoryTypeBits(), memProperties, vkPhysicalDevice));
 
-                if (VK10.vkAllocateMemory(this.vkDevice, allocateInfo, null, pTextureImageMemory) != VK10.VK_SUCCESS) {
+                if (VK10.vkAllocateMemory(vkDevice, allocateInfo, null, pTextureImageMemory) != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Failed to allocate image memory");
                 }
 
-                VK10.vkBindImageMemory(this.vkDevice, pTextureImage.get(0), pTextureImageMemory.get(0), 0);
+                VK10.vkBindImageMemory(vkDevice, pTextureImage.get(0), pTextureImageMemory.get(0), 0);
             }
-        }
-
-        private void memcpy(ByteBuffer dst, ByteBuffer src, long size) {
-            src.limit((int) size);
-            dst.put(src);
-            src.limit(src.capacity()).rewind();
         }
 
         private void createUniformBuffers() {
@@ -930,29 +939,29 @@ public class Ch00BaseCode {
 
         private void copyBuffer(long srcBuffer, long dstBuffer, long size) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+                VkCommandBuffer commandBuffer = beginSingleTimeCommands(this.vkDevice, this.commandPool);
 
                 VkBufferCopy.Buffer copyRegion = VkBufferCopy.callocStack(1, stack);
                 copyRegion.size(size);
 
                 VK10.vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, copyRegion);
 
-                endSingleTimeCommands(commandBuffer);
+                endSingleTimeCommands(commandBuffer, this.vkDevice, this.commandPool, this.vkGraphicsQueue);
             }
         }
 
-        private VkCommandBuffer beginSingleTimeCommands() {
+        private static VkCommandBuffer beginSingleTimeCommands(VkDevice vkDevice, long commandPool) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.callocStack(stack);
                 allocateInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
                 allocateInfo.level(VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-                allocateInfo.commandPool(this.commandPool);
+                allocateInfo.commandPool(commandPool);
                 allocateInfo.commandBufferCount(1);
 
                 PointerBuffer pCommandBuffer = stack.mallocPointer(1);
-                VK10.vkAllocateCommandBuffers(this.vkDevice, allocateInfo, pCommandBuffer);
+                VK10.vkAllocateCommandBuffers(vkDevice, allocateInfo, pCommandBuffer);
 
-                VkCommandBuffer commandBuffer = new VkCommandBuffer(pCommandBuffer.get(0), this.vkDevice);
+                VkCommandBuffer commandBuffer = new VkCommandBuffer(pCommandBuffer.get(0), vkDevice);
                 VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.callocStack(stack);
                 beginInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
                 beginInfo.flags(VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
@@ -963,7 +972,7 @@ public class Ch00BaseCode {
             }
         }
 
-        private void endSingleTimeCommands(VkCommandBuffer commandBuffer) {
+        private static void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkDevice vkDevice, long commandPool, VkQueue vkGraphicsQueue) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VK10.vkEndCommandBuffer(commandBuffer);
 
@@ -971,9 +980,9 @@ public class Ch00BaseCode {
                 submitInfo.sType(VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO);
                 submitInfo.pCommandBuffers(stack.pointers(commandBuffer));
 
-                VK10.vkQueueSubmit(this.vkGraphicsQueue, submitInfo, VK10.VK_NULL_HANDLE);
-                VK10.vkQueueWaitIdle(this.vkGraphicsQueue);
-                VK10.vkFreeCommandBuffers(this.vkDevice, this.commandPool, commandBuffer);
+                VK10.vkQueueSubmit(vkGraphicsQueue, submitInfo, VK10.VK_NULL_HANDLE);
+                VK10.vkQueueWaitIdle(vkGraphicsQueue);
+                VK10.vkFreeCommandBuffers(vkDevice, commandPool, commandBuffer);
             }
         }
 
@@ -995,7 +1004,7 @@ public class Ch00BaseCode {
                 VkMemoryAllocateInfo allocateInfo = VkMemoryAllocateInfo.callocStack(stack);
                 allocateInfo.sType(VK10.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
                 allocateInfo.allocationSize(memoryRequirements.size());
-                allocateInfo.memoryTypeIndex(findMemoryType(memoryRequirements.memoryTypeBits(), properties));
+                allocateInfo.memoryTypeIndex(findMemoryType(memoryRequirements.memoryTypeBits(), properties, this.vkPhysicalDevice));
 
                 if (VK10.vkAllocateMemory(this.vkDevice, allocateInfo, null, pBufferMemory) != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Failed to allocate vertex buffer memory");
@@ -1028,9 +1037,9 @@ public class Ch00BaseCode {
             byteBuffer.rewind();
         }
 
-        private int findMemoryType(int typeFilter, int properties) {
+        private static int findMemoryType(int typeFilter, int properties, VkPhysicalDevice vkPhysicalDevice) {
             VkPhysicalDeviceMemoryProperties memoryProperties = VkPhysicalDeviceMemoryProperties.mallocStack();
-            VK10.vkGetPhysicalDeviceMemoryProperties(this.vkPhysicalDevice, memoryProperties);
+            VK10.vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, memoryProperties);
 
             for (int i = 0; i < memoryProperties.memoryTypeCount(); i++) {
                 if ((typeFilter & (1 << i)) != 0 && (memoryProperties.memoryTypes(i).propertyFlags() & properties) == properties) {
@@ -1060,7 +1069,7 @@ public class Ch00BaseCode {
                 LongBuffer pColorImage = stack.mallocLong(1);
                 LongBuffer pColorImageMemory = stack.mallocLong(1);
 
-                createImage(this.swapChainExtent.width(),
+                createImage(this.vkDevice, this.vkPhysicalDevice, this.swapChainExtent.width(),
                         this.swapChainExtent.height(),
                         this.swapChainImageFormat,
                         VK10.VK_IMAGE_TILING_OPTIMAL,
@@ -1076,7 +1085,7 @@ public class Ch00BaseCode {
 
                 this.colorImageView = createImageView(this.colorImage, this.swapChainImageFormat, VK10.VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
-                transitionImageLayout(this.colorImage, this.swapChainImageFormat, VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
+                transitionImageLayout(this.vkDevice, this.commandPool, this.vkGraphicsQueue, this.colorImage, this.swapChainImageFormat, VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
             }
         }
 
@@ -1087,7 +1096,7 @@ public class Ch00BaseCode {
                 LongBuffer pDepthImage = stack.mallocLong(1);
                 LongBuffer pDepthImageMemory = stack.mallocLong(1);
 
-                createImage(this.swapChainExtent.width(),
+                createImage(this.vkDevice, this.vkPhysicalDevice, this.swapChainExtent.width(),
                         this.swapChainExtent.height(),
                         depthFormat,
                         VK10.VK_IMAGE_TILING_OPTIMAL,
@@ -1103,7 +1112,7 @@ public class Ch00BaseCode {
                 this.depthImageView = createImageView(this.depthImage, depthFormat, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 
                 //Explicitly transitioning the depth image
-                transitionImageLayout(this.depthImage,
+                transitionImageLayout(this.vkDevice, this.commandPool, this.vkGraphicsQueue, this.depthImage,
                         depthFormat,
                         VK10.VK_IMAGE_LAYOUT_UNDEFINED,
                         VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -1136,7 +1145,7 @@ public class Ch00BaseCode {
             throw new RuntimeException("Failed to find supported format");
         }
 
-        private boolean hasStencilComponent(int format) {
+        private static boolean hasStencilComponent(int format) {
             return format == VK10.VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK10.VK_FORMAT_D24_UNORM_S8_UINT;
         }
 
@@ -1355,21 +1364,19 @@ public class Ch00BaseCode {
             }
         }
 
-        private void createCommandPool() {
+        private static long createCommandPool(VkDevice vkDevice, QueueFamilyIndices queueFamilyIndices) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                QueueFamilyIndices queueFamilyIndices = findQueueFamilies(this.vkPhysicalDevice, this.surface);
-
                 VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.callocStack(stack);
                 poolInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
                 poolInfo.queueFamilyIndex(queueFamilyIndices.getGraphicsFamily());
 
                 LongBuffer pCommandPool = stack.mallocLong(1);
 
-                if (VK10.vkCreateCommandPool(this.vkDevice, poolInfo, null, pCommandPool) != VK10.VK_SUCCESS) {
+                if (VK10.vkCreateCommandPool(vkDevice, poolInfo, null, pCommandPool) != VK10.VK_SUCCESS) {
                     throw new RuntimeException("Failed to create command pool");
                 }
 
-                this.commandPool = pCommandPool.get(0);
+                return pCommandPool.get(0);
             }
         }
 
@@ -1723,11 +1730,11 @@ public class Ch00BaseCode {
                 createInfoKHR.imageArrayLayers(1);
                 createInfoKHR.imageUsage(VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 
-                QueueFamilyIndices indices = findQueueFamilies(this.vkPhysicalDevice, this.surface);
+                QueueFamilyIndices queueFamilyIndices = findQueueFamilies(this.vkPhysicalDevice, this.surface);
 
-                if (!indices.getGraphicsFamily().equals(indices.getPresentationFamily())) {
+                if (!queueFamilyIndices.getGraphicsFamily().equals(queueFamilyIndices.getPresentationFamily())) {
                     createInfoKHR.imageSharingMode(VK10.VK_SHARING_MODE_CONCURRENT);
-                    createInfoKHR.pQueueFamilyIndices(stack.ints(indices.getGraphicsFamily(), indices.getPresentationFamily()));
+                    createInfoKHR.pQueueFamilyIndices(stack.ints(queueFamilyIndices.getGraphicsFamily(), queueFamilyIndices.getPresentationFamily()));
                 } else {
                     createInfoKHR.imageSharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
                 }
@@ -1763,11 +1770,9 @@ public class Ch00BaseCode {
             }
         }
 
-        private void createLogicalDevice(VkPhysicalDevice vkPhysicalDevice, long surface) {
+        private static VkDevice createLogicalDevice(VkPhysicalDevice vkPhysicalDevice, QueueFamilyIndices queueFamilyIndices) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                QueueFamilyIndices indices = findQueueFamilies(vkPhysicalDevice, surface);
-
-                int[] uniqueQueueFamilies = indices.unique();
+                int[] uniqueQueueFamilies = queueFamilyIndices.unique();
 
                 VkDeviceQueueCreateInfo.Buffer queueCreateInfos = createQueueCreateInfos(stack, uniqueQueueFamilies);
 
@@ -1793,16 +1798,24 @@ public class Ch00BaseCode {
                     throw new RuntimeException("Failed to create logical device");
                 }
 
-                //TODO :: refaktor into three creator static methods
+                return new VkDevice(pDevice.get(0), vkPhysicalDevice, createInfo);
 
-                this.vkDevice = new VkDevice(pDevice.get(0), vkPhysicalDevice, createInfo);
-                PointerBuffer pQueue = stack.pointers(VK10.VK_NULL_HANDLE);
-                VK10.vkGetDeviceQueue(this.vkDevice, indices.getGraphicsFamily(), 0, pQueue);
+            }
+        }
 
-                this.vkGraphicsQueue = new VkQueue(pQueue.get(0), this.vkDevice);
+        private static VkQueue createPresentationQueue(VkDevice vkDevice, QueueFamilyIndices queueFamilyIndices) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                PointerBuffer pQueuePresentation = stack.pointers(VK10.VK_NULL_HANDLE);
+                VK10.vkGetDeviceQueue(vkDevice, queueFamilyIndices.getPresentationFamily(), 0, pQueuePresentation);
+                return new VkQueue(pQueuePresentation.get(0), vkDevice);
+            }
+        }
 
-                VK10.vkGetDeviceQueue(this.vkDevice, indices.getPresentationFamily(), 0, pQueue);
-                this.vkPresentQueue = new VkQueue(pQueue.get(0), this.vkDevice);
+        private static VkQueue createGraphicsQueue(VkDevice vkDevice, QueueFamilyIndices queueFamilyIndices) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                PointerBuffer pQueueGraphics = stack.pointers(VK10.VK_NULL_HANDLE);
+                VK10.vkGetDeviceQueue(vkDevice, queueFamilyIndices.getGraphicsFamily(), 0, pQueueGraphics);
+                return new VkQueue(pQueueGraphics.get(0), vkDevice);
             }
         }
 

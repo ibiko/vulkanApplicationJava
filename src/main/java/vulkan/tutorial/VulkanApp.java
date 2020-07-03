@@ -1,9 +1,6 @@
 package vulkan.tutorial;
 
-import org.joml.Vector3f;
-import org.joml.Vector3fc;
 import org.lwjgl.PointerBuffer;
-import org.lwjgl.assimp.Assimp;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.stb.STBImage;
@@ -11,16 +8,17 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.*;
 import vulkan.tutorial.gameobject.GameObject;
+import vulkan.tutorial.gameobject.GameObjectLoader;
 import vulkan.tutorial.math.Vertex;
-import vulkan.tutorial.mesh.Model;
-import vulkan.tutorial.mesh.ModelLoader;
-import vulkan.tutorial.shader.*;
+import vulkan.tutorial.shader.SPIRV;
+import vulkan.tutorial.shader.ShaderKind;
+import vulkan.tutorial.shader.ShaderSPIRVUtils;
+import vulkan.tutorial.shader.UniformBufferObject;
 import vulkan.tutorial.vulkan.Frame;
 import vulkan.tutorial.vulkan.QueueFamilyIndices;
 import vulkan.tutorial.vulkan.SwapChainSupportDetails;
 import vulkan.tutorial.vulkan.ValidationLayers;
 
-import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -62,7 +60,6 @@ class VulkanApp {
     private VkInstance vkInstance;
     private long surface;
     private VkPhysicalDevice vkPhysicalDevice;
-    private int msaaSamples = VK10.VK_SAMPLE_COUNT_1_BIT;
     private VkDevice vkDevice;
     private VkQueue vkGraphicsQueue;
     private VkQueue vkPresentQueue;
@@ -92,6 +89,8 @@ class VulkanApp {
     private long depthImageView;
 
     private int mipLevels;
+    private int msaaSamples = VK10.VK_SAMPLE_COUNT_1_BIT;
+
     private long textureImage;
     private long textureImageMemory;
     private long textureImageView;
@@ -669,11 +668,13 @@ class VulkanApp {
         this.vkPresentQueue = createPresentationQueue(this.vkDevice, queueFamilyIndices);
         this.commandPool = createCommandPool(this.vkDevice, queueFamilyIndices);
 
+        this.gameObject = GameObjectLoader.loadModel("models/chalet.obj");
+
         createTextureImage();
         createTextureImageView();
 
         this.textureSampler = createTextureSampler(this.vkDevice, this.mipLevels);
-        this.gameObject = loadModel();
+
         createVertexBuffer();
         createIndexBuffer();
         createDescriptorSetLayout();
@@ -741,33 +742,6 @@ class VulkanApp {
 
             this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
-    }
-
-    private GameObject loadModel() {
-        File modelFile = new File(ClassLoader.getSystemClassLoader().getResource("models/chalet.obj").getFile());
-        Model model = ModelLoader.loadModel(modelFile, Assimp.aiProcess_FlipUVs | Assimp.aiProcess_DropNormals);
-
-        final int vertexCount = model.getPositions().size();
-
-        Vertex[] vertices = new Vertex[vertexCount];
-
-        final Vector3fc color = new Vector3f(1.0f, 1.0f, 1.0f);
-
-        for (int i = 0; i < vertexCount; i++) {
-            vertices[i] = new Vertex(
-                    model.getPositions().get(i),
-                    color,
-                    model.getTexCoords().get(i)
-            );
-        }
-
-        int[] indices = new int[model.getIndices().size()];
-
-        for (int i = 0; i < indices.length; i++) {
-            indices[i] = model.getIndices().get(i);
-        }
-
-        return new GameObject(null, vertices, indices);
     }
 
     private void createTextureImageView() {

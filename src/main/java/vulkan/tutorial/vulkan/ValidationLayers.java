@@ -27,7 +27,7 @@ public class ValidationLayers {
 
     private long debugMessenger;
 
-    public static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
+    private static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
         VkDebugUtilsMessengerCallbackDataEXT callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
         System.err.println("Validation layer: " + callbackData.pMessageString());
         return VK10.VK_FALSE;

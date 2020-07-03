@@ -10,6 +10,11 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 
 public class ShaderSPIRVUtils {
+
+    private ShaderSPIRVUtils(){
+        //Utils class
+    }
+
     public static SPIRV compileShaderFile(String shaderFile, ShaderKind shaderKind) {
         return compileShaderAbsoluteFile(ClassLoader.getSystemClassLoader().getResource(shaderFile).toExternalForm(), shaderKind);
     }

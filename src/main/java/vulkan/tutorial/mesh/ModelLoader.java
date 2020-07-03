@@ -1,4 +1,4 @@
-package vulkan.tutorial;
+package vulkan.tutorial.mesh;
 
 import org.joml.Vector2f;
 import org.joml.Vector2fc;
@@ -6,7 +6,6 @@ import org.joml.Vector3f;
 import org.joml.Vector3fc;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.assimp.*;
-import vulkan.tutorial.mesh.Model;
 
 import java.io.File;
 import java.nio.IntBuffer;
@@ -15,6 +14,10 @@ import java.util.Objects;
 import java.util.logging.Logger;
 
 public class ModelLoader {
+
+    private ModelLoader(){
+        //Do nothing
+    }
     public static Model loadModel(File file, int flags) {
         //TODO check if you refactor the processNode code if the try with resources can work
         AIScene scene = Assimp.aiImportFile(file.getAbsolutePath(), flags);
@@ -31,7 +34,7 @@ public class ModelLoader {
 
         processNode(scene.mRootNode(), scene, model);
 
-        logger.info("Model loaded in " + ((System.nanoTime() - startTime) / 1e6) + "ms");
+        logger.info(() -> "Model loaded in " + ((System.nanoTime() - startTime) / 1e6) + "ms");
 
         return model;
     }

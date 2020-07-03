@@ -1,4 +1,4 @@
-package vulkan.tutorial;
+package vulkan.tutorial.vulkan;
 
 import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;

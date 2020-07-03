@@ -7,15 +7,18 @@ import org.lwjgl.assimp.Assimp;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.stb.STBImage;
-import org.lwjgl.system.Configuration;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.*;
 import vulkan.tutorial.gameobject.GameObject;
 import vulkan.tutorial.math.Vertex;
 import vulkan.tutorial.mesh.Model;
+import vulkan.tutorial.mesh.ModelLoader;
 import vulkan.tutorial.shader.*;
+import vulkan.tutorial.vulkan.Frame;
+import vulkan.tutorial.vulkan.QueueFamilyIndices;
+import vulkan.tutorial.vulkan.SwapChainSupportDetails;
+import vulkan.tutorial.vulkan.ValidationLayers;
 
 import java.io.File;
 import java.nio.ByteBuffer;
@@ -24,6 +27,8 @@ import java.nio.LongBuffer;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static vulkan.tutorial.vulkan.ValidationLayers.ENABLE_VALIDATION_LAYERS;
 
 class VulkanApp {
 
@@ -48,45 +53,31 @@ class VulkanApp {
         #renderingPipeline
     */
 
-
-    private static final int WIDTH = 800;
-    private static final int HEIGHT = 600;
-    private static final boolean ENABLE_VALIDATION_LAYERS = Configuration.DEBUG.get(true);
-    private static final Set<String> VALIDATION_LAYERS;
     private static final Set<String> DEVICE_EXTENSIONS = Stream.of(KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME)
             .collect(Collectors.toSet());
     private static final int UINT32_MAX = 0xFFFFFFFF;
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
     private static final long UINT64_MAX = 0xFFFFFFFFFFFFFFFFL;
 
-    static {
-        if (ENABLE_VALIDATION_LAYERS) {
-            VALIDATION_LAYERS = new HashSet<>();
-            VALIDATION_LAYERS.add("VK_LAYER_KHRONOS_validation");
-        } else {
-            VALIDATION_LAYERS = null;
-        }
-    }
-
-    boolean frameBufferResize;
-    private long window;
     private VkInstance vkInstance;
-    private long debugMessenger;
     private long surface;
     private VkPhysicalDevice vkPhysicalDevice;
     private int msaaSamples = VK10.VK_SAMPLE_COUNT_1_BIT;
     private VkDevice vkDevice;
     private VkQueue vkGraphicsQueue;
     private VkQueue vkPresentQueue;
+
     private long swapChain;
     private List<Long> swapChainImages;
     private List<Long> swapChainImageViews;
     private int swapChainImageFormat;
     private VkExtent2D swapChainExtent;
     private List<Long> swapChainFrameBuffers;
+
     private long descriptorPool;
     private long descriptorSetLayout;
     private List<Long> descriptorSets;
+
     private long pipelineLayout;
     private long renderPass;
     private long graphicsPipeline;
@@ -106,6 +97,8 @@ class VulkanApp {
     private long textureImageView;
     private long textureSampler;
 
+    private Window window;
+    private ValidationLayers validationLayers;
     private GameObject gameObject;
 
     private long vertexBuffer;
@@ -121,28 +114,6 @@ class VulkanApp {
     private List<Frame> inFlightFrames;
     private Map<Integer, Frame> imagesInFlight;
     private int currentFrame;
-
-    private static int debugCallback(int messageSeverity, int messageType, long pCallbackData, long pUserData) {
-        VkDebugUtilsMessengerCallbackDataEXT callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
-        System.err.println("Validation layer: " + callbackData.pMessageString());
-        return VK10.VK_FALSE;
-    }
-
-    private static boolean checkValidationLayerSupport() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer layerCount = stack.ints(0);
-
-            VK10.vkEnumerateInstanceLayerProperties(layerCount, null);
-
-            VkLayerProperties.Buffer availableLayers = VkLayerProperties.mallocStack(layerCount.get(0), stack);
-            VK10.vkEnumerateInstanceLayerProperties(layerCount, availableLayers);
-
-            Set<String> availableLayerNames = availableLayers.stream().map(VkLayerProperties::layerNameString)
-                    .collect(Collectors.toSet());
-
-            return availableLayerNames.containsAll(VALIDATION_LAYERS);
-        }
-    }
 
     private static long createTextureSampler(VkDevice vkDevice, int mipLevels) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -351,43 +322,8 @@ class VulkanApp {
         }
     }
 
-    private static long setupDebugMessenger(VkInstance vkInstance) {
-        if (!ENABLE_VALIDATION_LAYERS) {
-            return 0;
-        }
-
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDebugUtilsMessengerCreateInfoEXT createInfoEXT = VkDebugUtilsMessengerCreateInfoEXT.callocStack(stack);
-
-            populateDebugMessengerCreateInfo(createInfoEXT);
-
-            LongBuffer pDebugMessenger = stack.longs(VK10.VK_NULL_HANDLE);
-
-            if (createDebugUtilsMessengerEXT(vkInstance, createInfoEXT, null, pDebugMessenger) != VK11.VK_SUCCESS) {
-                throw new RuntimeException("Failed to setup debug messenger");
-            }
-
-            return pDebugMessenger.get(0);
-        }
-    }
-
-    private static int createDebugUtilsMessengerEXT(VkInstance vkInstance, VkDebugUtilsMessengerCreateInfoEXT createInfoEXT, VkAllocationCallbacks vkAllocationCallbacks, LongBuffer pDebugMessenger) {
-        if (VK10.vkGetInstanceProcAddr(vkInstance, "vkCreateDebugUtilsMessengerEXT") != MemoryUtil.NULL) {
-            return EXTDebugUtils.vkCreateDebugUtilsMessengerEXT(vkInstance, createInfoEXT, vkAllocationCallbacks, pDebugMessenger);
-        }
-
-        return VK10.VK_ERROR_EXTENSION_NOT_PRESENT;
-    }
-
-    private static void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT createInfoEXT) {
-        createInfoEXT.sType(EXTDebugUtils.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT);
-        createInfoEXT.messageSeverity(EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT);
-        createInfoEXT.messageType(EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT);
-        createInfoEXT.pfnUserCallback(VulkanApp::debugCallback);
-    }
-
     private static VkInstance createInstance(String appName, int appVersion, String engineName, int engineVersion, int vkApiVersion) {
-        if (ENABLE_VALIDATION_LAYERS && !checkValidationLayerSupport()) {
+        if (ValidationLayers.ENABLE_VALIDATION_LAYERS && !ValidationLayers.checkValidationLayerSupport()) {
             throw new RuntimeException("Validation requested but not supported");
         }
 
@@ -414,10 +350,9 @@ class VulkanApp {
 
             createInfo.ppEnabledExtensionNames(queryRequiredExtensions());
 
-            if (ENABLE_VALIDATION_LAYERS) {
-                createInfo.ppEnabledLayerNames(asPointBuffer(VALIDATION_LAYERS));
-                VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo = VkDebugUtilsMessengerCreateInfoEXT.callocStack(stack);
-                populateDebugMessengerCreateInfo(debugCreateInfo);
+            if (ValidationLayers.ENABLE_VALIDATION_LAYERS) {
+                createInfo.ppEnabledLayerNames(asPointBuffer(ValidationLayers.VALIDATION_LAYERS));
+                VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo = ValidationLayers.createVkDebugUtilsMessengerCreateInfoExt(stack);
                 createInfo.pNext(debugCreateInfo.address());
             }
 
@@ -459,12 +394,6 @@ class VulkanApp {
             queueCreateInfo.pQueuePriorities(stack.floats(1.0f));
         }
         return queueCreateInfos;
-    }
-
-    private static void memcpy(ByteBuffer dst, ByteBuffer src, long size) {
-        src.limit((int) size);
-        dst.put(src);
-        src.limit(src.capacity()).rewind();
     }
 
     private static void transitionImageLayout(VkDevice vkDevice, long commandPool, VkQueue vkGraphicsQueue, long image, int format, int oldLayout, int newLayout, int mipMapLevels) {
@@ -660,8 +589,8 @@ class VulkanApp {
 
             createInfo.ppEnabledExtensionNames(asPointBuffer(DEVICE_EXTENSIONS));
 
-            if (ENABLE_VALIDATION_LAYERS) {
-                createInfo.ppEnabledLayerNames(asPointBuffer(VALIDATION_LAYERS));
+            if (ValidationLayers.ENABLE_VALIDATION_LAYERS) {
+                createInfo.ppEnabledLayerNames(asPointBuffer(ValidationLayers.VALIDATION_LAYERS));
             }
 
             PointerBuffer pDevice = stack.pointers(VK10.VK_NULL_HANDLE);
@@ -692,7 +621,8 @@ class VulkanApp {
     }
 
     public void run() {
-        initWindow();
+        this.window = new Window(800, 600);
+        this.window.initWindow();
         initVulkan();
         mainLoop();
         cleanup();
@@ -701,38 +631,18 @@ class VulkanApp {
     private void mainLoop() {
         int fps = 0;
         double lastTime = System.currentTimeMillis();
-        while (!GLFW.glfwWindowShouldClose(this.window)) {
+        while (!GLFW.glfwWindowShouldClose(this.window.getWindowHandle())) {
             if (System.currentTimeMillis() - lastTime >= 1000) {
-                GLFW.glfwSetWindowTitle(this.window, String.valueOf(fps));
+                GLFW.glfwSetWindowTitle(this.window.getWindowHandle(), String.valueOf(fps));
                 lastTime = System.currentTimeMillis();
                 fps = 0;
             }
             GLFW.glfwPollEvents();
             drawFrame();
-//                System.out.println("FramesInFLight: " + this.imagesInFlight);
             fps++;
         }
 
         VK10.vkDeviceWaitIdle(this.vkDevice);
-    }
-
-    private void initWindow() {
-        if (!GLFW.glfwInit()) {
-            throw new RuntimeException("Cannot initialize GLFW");
-        }
-
-        GLFW.glfwWindowHint(GLFW.GLFW_CLIENT_API, GLFW.GLFW_NO_API);
-        GLFW.glfwWindowHint(GLFW.GLFW_RESIZABLE, GLFW.GLFW_TRUE);
-
-        String title = "Java-jwgl-Vulkan-Rendering";
-
-        this.window = GLFW.glfwCreateWindow(WIDTH, HEIGHT, title, MemoryUtil.NULL, MemoryUtil.NULL);
-
-        if (this.window == MemoryUtil.NULL) {
-            throw new RuntimeException("Cannot create window");
-        }
-
-        GLFW.glfwSetFramebufferSizeCallback(this.window, this::frameBufferSizeCallback);
     }
 
     private void initVulkan() {
@@ -742,8 +652,11 @@ class VulkanApp {
                 VK10.VK_MAKE_VERSION(1, 0, 0),
                 VK11.VK_API_VERSION_1_1);
 
-        this.debugMessenger = setupDebugMessenger(this.vkInstance);
-        this.surface = createSurface(this.vkInstance, this.window);
+
+        this.validationLayers = new ValidationLayers();
+        this.validationLayers.setupDebugMessenger(this.vkInstance);
+
+        this.surface = createSurface(this.vkInstance, this.window.getWindowHandle());
         this.vkPhysicalDevice = pickPhysicalDevice(this.vkInstance, this.surface);
 
         //TODO :: test how multisampling is efecting the fps :: ibikov
@@ -819,8 +732,8 @@ class VulkanApp {
 
             vkResult = KHRSwapchain.vkQueuePresentKHR(this.vkPresentQueue, presentInfoKHR);
 
-            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR || vkResult == KHRSwapchain.VK_SUBOPTIMAL_KHR || this.frameBufferResize) {
-                this.frameBufferResize = false;
+            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR || vkResult == KHRSwapchain.VK_SUBOPTIMAL_KHR || this.window.isWindowResized()) {
+                this.window.setWindowResized(false);
                 recreateSwapChain();
             } else if (vkResult != VK10.VK_SUCCESS) {
                 throw new RuntimeException("Failed to present swap chain image");
@@ -828,10 +741,6 @@ class VulkanApp {
 
             this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
-    }
-
-    private void frameBufferSizeCallback(long window, int width, int height) {
-        this.frameBufferResize = true;
     }
 
     private GameObject loadModel() {
@@ -894,7 +803,7 @@ class VulkanApp {
             PointerBuffer data = stack.mallocPointer(1);
             VK10.vkMapMemory(this.vkDevice, pStagingBufferMemory.get(0), 0, imageSize, 0, data);
             {
-                memcpy(data.getByteBuffer(0, (int) imageSize), pixels, imageSize);
+                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, (int) imageSize), pixels, imageSize);
             }
             VK10.vkUnmapMemory(this.vkDevice, pStagingBufferMemory.get(0));
 
@@ -1094,7 +1003,7 @@ class VulkanApp {
 
             VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
             {
-                memcpy(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getIndices());
+                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getIndices());
             }
             VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -1132,7 +1041,7 @@ class VulkanApp {
 
             VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
             {
-                memcpy(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getVertices());
+                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getVertices());
             }
             VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -1191,29 +1100,6 @@ class VulkanApp {
 
             VK10.vkBindBufferMemory(this.vkDevice, pBuffer.get(0), pBufferMemory.get(0), 0);
         }
-    }
-
-    private void memcpy(ByteBuffer byteBuffer, Vertex[] vertices) {
-        for (Vertex vertex : vertices) {
-            byteBuffer.putFloat(vertex.getPos().x());
-            byteBuffer.putFloat(vertex.getPos().y());
-            byteBuffer.putFloat(vertex.getPos().z());
-
-            byteBuffer.putFloat(vertex.getColor().x());
-            byteBuffer.putFloat(vertex.getColor().y());
-            byteBuffer.putFloat(vertex.getColor().z());
-
-            byteBuffer.putFloat(vertex.getTexCoords().x());
-            byteBuffer.putFloat(vertex.getTexCoords().y());
-        }
-    }
-
-    private void memcpy(ByteBuffer byteBuffer, int[] indices) {
-        for (int index : indices) {
-            byteBuffer.putInt(index);
-        }
-
-        byteBuffer.rewind();
     }
 
     private void createSwapChainObjects() {
@@ -1839,7 +1725,7 @@ class VulkanApp {
             IntBuffer height = stack.ints(0);
 
             while (width.get(0) == 0 && height.get(0) == 0) {
-                GLFW.glfwGetFramebufferSize(this.window, width, height);
+                GLFW.glfwGetFramebufferSize(this.window.getWindowHandle(), width, height);
                 GLFW.glfwWaitEvents();
             }
         }
@@ -1941,7 +1827,7 @@ class VulkanApp {
         IntBuffer width = MemoryStack.stackGet().ints(0);
         IntBuffer height = MemoryStack.stackGet().ints(0);
 
-        GLFW.glfwGetFramebufferSize(this.window, width, height);
+        GLFW.glfwGetFramebufferSize(this.window.getWindowHandle(), width, height);
 
         VkExtent2D actualExtent = VkExtent2D.mallocStack().set(width.get(0), height.get(0));
 
@@ -1971,18 +1857,10 @@ class VulkanApp {
             PointerBuffer data = stack.mallocPointer(1);
             VK10.vkMapMemory(this.vkDevice, this.uniformBuffersMemory.get(currentImage), 0, UniformBufferObject.SIZEOF, 0, data);
             {
-                memcpy(data.getByteBuffer(0, UniformBufferObject.SIZEOF), ubo);
+                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, UniformBufferObject.SIZEOF), ubo);
             }
             VK10.vkUnmapMemory(this.vkDevice, this.uniformBuffersMemory.get(currentImage));
         }
-    }
-
-    private void memcpy(ByteBuffer byteBuffer, UniformBufferObject uniformBufferObject) {
-        final int mat4size = 16 * Float.BYTES;
-
-        uniformBufferObject.getModel().get(0, byteBuffer);
-        uniformBufferObject.getView().get(AlignmentUtils.alignAs(mat4size, AlignmentUtils.alignOf(uniformBufferObject.getView())), byteBuffer);
-        uniformBufferObject.getProjection().get(AlignmentUtils.alignAs(mat4size * 2, AlignmentUtils.alignOf(uniformBufferObject.getView())), byteBuffer);
     }
 
     private double log2(double value) {
@@ -2038,20 +1916,14 @@ class VulkanApp {
         VK10.vkDestroyDevice(this.vkDevice, null);
 
         if (ENABLE_VALIDATION_LAYERS) {
-            destroyDebugUtilsMessengerEXT(this.vkInstance, this.debugMessenger, null);
+            this.validationLayers.destroyDebugUtilsMessengerEXT(this.vkInstance, null);
         }
 
         //must be destroyed before the instance
         KHRSurface.vkDestroySurfaceKHR(this.vkInstance, this.surface, null);
 
         VK10.vkDestroyInstance(this.vkInstance, null);
-        GLFW.glfwDestroyWindow(this.window);
+        GLFW.glfwDestroyWindow(this.window.getWindowHandle());
         GLFW.glfwTerminate();
-    }
-
-    private void destroyDebugUtilsMessengerEXT(VkInstance vkInstance, long debugMessenger, VkAllocationCallbacks vkAllocationCallbacks) {
-        if (VK10.vkGetInstanceProcAddr(vkInstance, "vkDestroyDebugUtilsMessengerEXT") != MemoryUtil.NULL) {
-            EXTDebugUtils.vkDestroyDebugUtilsMessengerEXT(vkInstance, debugMessenger, vkAllocationCallbacks);
-        }
     }
 }

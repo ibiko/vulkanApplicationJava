@@ -1,4 +1,4 @@
-package vulkan.tutorial;
+package vulkan.tutorial.vulkan;
 
 import java.util.stream.IntStream;
 

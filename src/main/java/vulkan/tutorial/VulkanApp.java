@@ -12,6 +12,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.*;
+import vulkan.tutorial.gameobject.GameObject;
 import vulkan.tutorial.math.Vertex;
 import vulkan.tutorial.mesh.Model;
 import vulkan.tutorial.shader.*;
@@ -25,6 +26,29 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 class VulkanApp {
+
+    /*  Vulkan Components
+        #instance
+        #physicalDevice
+        #logicalDevice
+
+        GLFW
+        #window
+
+        #surface
+        #swapChain
+        #swapChainImages
+        #swapChainImageViews
+        #swapChainExtent
+        #swapChainFrameBuffers
+
+        #presentationQueue
+        #graphicalQueue
+
+        #renderingPipeline
+    */
+
+
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
     private static final boolean ENABLE_VALIDATION_LAYERS = Configuration.DEBUG.get(true);
@@ -82,8 +106,7 @@ class VulkanApp {
     private long textureImageView;
     private long textureSampler;
 
-    private Vertex[] vertices;
-    private int[] indices;
+    private GameObject gameObject;
 
     private long vertexBuffer;
     private long vertexBufferMemory;
@@ -675,6 +698,24 @@ class VulkanApp {
         cleanup();
     }
 
+    private void mainLoop() {
+        int fps = 0;
+        double lastTime = System.currentTimeMillis();
+        while (!GLFW.glfwWindowShouldClose(this.window)) {
+            if (System.currentTimeMillis() - lastTime >= 1000) {
+                GLFW.glfwSetWindowTitle(this.window, String.valueOf(fps));
+                lastTime = System.currentTimeMillis();
+                fps = 0;
+            }
+            GLFW.glfwPollEvents();
+            drawFrame();
+//                System.out.println("FramesInFLight: " + this.imagesInFlight);
+            fps++;
+        }
+
+        VK10.vkDeviceWaitIdle(this.vkDevice);
+    }
+
     private void initWindow() {
         if (!GLFW.glfwInit()) {
             throw new RuntimeException("Cannot initialize GLFW");
@@ -692,10 +733,6 @@ class VulkanApp {
         }
 
         GLFW.glfwSetFramebufferSizeCallback(this.window, this::frameBufferSizeCallback);
-    }
-
-    private void frameBufferSizeCallback(long window, int width, int height) {
-        this.frameBufferResize = true;
     }
 
     private void initVulkan() {
@@ -723,7 +760,7 @@ class VulkanApp {
         createTextureImageView();
 
         this.textureSampler = createTextureSampler(this.vkDevice, this.mipLevels);
-        loadModel();
+        this.gameObject = loadModel();
         createVertexBuffer();
         createIndexBuffer();
         createDescriptorSetLayout();
@@ -731,29 +768,97 @@ class VulkanApp {
         createSyncObjects();
     }
 
-    private void loadModel() {
+    private void drawFrame() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            Frame thisFrame = this.inFlightFrames.get(this.currentFrame);
+
+            VK10.vkWaitForFences(this.vkDevice, thisFrame.pFence(), true, UINT64_MAX);
+
+            IntBuffer pImageIndex = stack.mallocInt(1);
+
+            int vkResult = KHRSwapchain.vkAcquireNextImageKHR(this.vkDevice, this.swapChain, UINT64_MAX, thisFrame.getImageAvailableSemaphore(), VK10.VK_NULL_HANDLE, pImageIndex);
+
+            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR) {
+                recreateSwapChain();
+                return;
+            } else if (vkResult != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Cannot get image");
+            }
+
+            final int imageIndex = pImageIndex.get(0);
+
+            updateUniformBuffer(imageIndex);
+
+            if (this.imagesInFlight.containsKey(imageIndex)) {
+                VK10.vkWaitForFences(this.vkDevice, this.imagesInFlight.get(imageIndex).getFence(), true, UINT64_MAX);
+            }
+
+            this.imagesInFlight.put(imageIndex, thisFrame);
+
+            VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
+            submitInfo.sType(VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO);
+            submitInfo.waitSemaphoreCount(1);
+            submitInfo.pWaitSemaphores(thisFrame.pImageAvailableSemaphore());
+            submitInfo.pWaitDstStageMask(stack.ints(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
+            submitInfo.pSignalSemaphores(thisFrame.pRenderFinishedSemaphore());
+            submitInfo.pCommandBuffers(stack.pointers(this.commandBuffers.get(imageIndex)));
+
+            VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
+
+            if (VK10.vkQueueSubmit(this.vkGraphicsQueue, submitInfo, thisFrame.getFence()) != VK10.VK_SUCCESS) {
+                VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
+                throw new RuntimeException("Failed to submit draw command buffer");
+            }
+
+            VkPresentInfoKHR presentInfoKHR = VkPresentInfoKHR.callocStack(stack);
+            presentInfoKHR.sType(KHRSwapchain.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+            presentInfoKHR.pWaitSemaphores(thisFrame.pRenderFinishedSemaphore());
+            presentInfoKHR.swapchainCount(1);
+            presentInfoKHR.pSwapchains(stack.longs(this.swapChain));
+            presentInfoKHR.pImageIndices(pImageIndex);
+
+            vkResult = KHRSwapchain.vkQueuePresentKHR(this.vkPresentQueue, presentInfoKHR);
+
+            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR || vkResult == KHRSwapchain.VK_SUBOPTIMAL_KHR || this.frameBufferResize) {
+                this.frameBufferResize = false;
+                recreateSwapChain();
+            } else if (vkResult != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to present swap chain image");
+            }
+
+            this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+        }
+    }
+
+    private void frameBufferSizeCallback(long window, int width, int height) {
+        this.frameBufferResize = true;
+    }
+
+    private GameObject loadModel() {
         File modelFile = new File(ClassLoader.getSystemClassLoader().getResource("models/chalet.obj").getFile());
         Model model = ModelLoader.loadModel(modelFile, Assimp.aiProcess_FlipUVs | Assimp.aiProcess_DropNormals);
 
         final int vertexCount = model.getPositions().size();
 
-        this.vertices = new Vertex[vertexCount];
+        Vertex[] vertices = new Vertex[vertexCount];
 
         final Vector3fc color = new Vector3f(1.0f, 1.0f, 1.0f);
 
         for (int i = 0; i < vertexCount; i++) {
-            this.vertices[i] = new Vertex(
+            vertices[i] = new Vertex(
                     model.getPositions().get(i),
                     color,
                     model.getTexCoords().get(i)
             );
         }
 
-        this.indices = new int[model.getIndices().size()];
+        int[] indices = new int[model.getIndices().size()];
 
-        for (int i = 0; i < this.indices.length; i++) {
-            this.indices[i] = model.getIndices().get(i);
+        for (int i = 0; i < indices.length; i++) {
+            indices[i] = model.getIndices().get(i);
         }
+
+        return new GameObject(null, vertices, indices);
     }
 
     private void createTextureImageView() {
@@ -971,7 +1076,7 @@ class VulkanApp {
 
     private void createIndexBuffer() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            long bufferSize = Integer.BYTES * this.indices.length;
+            long bufferSize = Integer.BYTES * this.gameObject.getIndices().length;
 
             LongBuffer pBuffer = stack.mallocLong(1);
             LongBuffer pBufferMemory = stack.mallocLong(1);
@@ -989,7 +1094,7 @@ class VulkanApp {
 
             VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
             {
-                memcpy(data.getByteBuffer(0, (int) bufferSize), this.indices);
+                memcpy(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getIndices());
             }
             VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -1011,7 +1116,7 @@ class VulkanApp {
 
     private void createVertexBuffer() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            long bufferSize = Vertex.SIZEOF * this.vertices.length;
+            long bufferSize = Vertex.SIZEOF * this.gameObject.getVertices().length;
 
             LongBuffer pBuffer = stack.mallocLong(1);
             LongBuffer pBufferMemory = stack.mallocLong(1);
@@ -1027,7 +1132,7 @@ class VulkanApp {
 
             VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
             {
-                memcpy(data.getByteBuffer(0, (int) bufferSize), this.vertices);
+                memcpy(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getVertices());
             }
             VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -1410,7 +1515,7 @@ class VulkanApp {
                     VK10.vkCmdBindDescriptorSets(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
                             this.pipelineLayout, 0, stack.longs(this.descriptorSets.get(i)), null);
 
-                    VK10.vkCmdDrawIndexed(commandBuffer, this.indices.length, 1, 0, 0, 0);
+                    VK10.vkCmdDrawIndexed(commandBuffer, this.gameObject.getIndices().length, 1, 0, 0, 0);
                 }
                 VK10.vkCmdEndRenderPass(commandBuffer);
 
@@ -1851,86 +1956,6 @@ class VulkanApp {
 
     private int clamp(int min, int max, int value) {
         return Math.max(min, Math.min(max, value));
-    }
-
-    private void mainLoop() {
-        int fps = 0;
-        double lastTime = System.currentTimeMillis();
-        while (!GLFW.glfwWindowShouldClose(this.window)) {
-            if (System.currentTimeMillis() - lastTime >= 1000) {
-                GLFW.glfwSetWindowTitle(this.window, String.valueOf(fps));
-                lastTime = System.currentTimeMillis();
-                fps = 0;
-            }
-            GLFW.glfwPollEvents();
-            drawFrame();
-//                System.out.println("FramesInFLight: " + this.imagesInFlight);
-            fps++;
-        }
-
-        VK10.vkDeviceWaitIdle(this.vkDevice);
-    }
-
-    private void drawFrame() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            Frame thisFrame = this.inFlightFrames.get(this.currentFrame);
-
-            VK10.vkWaitForFences(this.vkDevice, thisFrame.pFence(), true, UINT64_MAX);
-
-            IntBuffer pImageIndex = stack.mallocInt(1);
-
-            int vkResult = KHRSwapchain.vkAcquireNextImageKHR(this.vkDevice, this.swapChain, UINT64_MAX, thisFrame.getImageAvailableSemaphore(), VK10.VK_NULL_HANDLE, pImageIndex);
-
-            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR) {
-                recreateSwapChain();
-                return;
-            } else if (vkResult != VK10.VK_SUCCESS) {
-                throw new RuntimeException("Cannot get image");
-            }
-
-            final int imageIndex = pImageIndex.get(0);
-
-            updateUniformBuffer(imageIndex);
-
-            if (this.imagesInFlight.containsKey(imageIndex)) {
-                VK10.vkWaitForFences(this.vkDevice, this.imagesInFlight.get(imageIndex).getFence(), true, UINT64_MAX);
-            }
-
-            this.imagesInFlight.put(imageIndex, thisFrame);
-
-            VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
-            submitInfo.sType(VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO);
-            submitInfo.waitSemaphoreCount(1);
-            submitInfo.pWaitSemaphores(thisFrame.pImageAvailableSemaphore());
-            submitInfo.pWaitDstStageMask(stack.ints(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
-            submitInfo.pSignalSemaphores(thisFrame.pRenderFinishedSemaphore());
-            submitInfo.pCommandBuffers(stack.pointers(this.commandBuffers.get(imageIndex)));
-
-            VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
-
-            if (VK10.vkQueueSubmit(this.vkGraphicsQueue, submitInfo, thisFrame.getFence()) != VK10.VK_SUCCESS) {
-                VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
-                throw new RuntimeException("Failed to submit draw command buffer");
-            }
-
-            VkPresentInfoKHR presentInfoKHR = VkPresentInfoKHR.callocStack(stack);
-            presentInfoKHR.sType(KHRSwapchain.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
-            presentInfoKHR.pWaitSemaphores(thisFrame.pRenderFinishedSemaphore());
-            presentInfoKHR.swapchainCount(1);
-            presentInfoKHR.pSwapchains(stack.longs(this.swapChain));
-            presentInfoKHR.pImageIndices(pImageIndex);
-
-            vkResult = KHRSwapchain.vkQueuePresentKHR(this.vkPresentQueue, presentInfoKHR);
-
-            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR || vkResult == KHRSwapchain.VK_SUBOPTIMAL_KHR || this.frameBufferResize) {
-                this.frameBufferResize = false;
-                recreateSwapChain();
-            } else if (vkResult != VK10.VK_SUCCESS) {
-                throw new RuntimeException("Failed to present swap chain image");
-            }
-
-            this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-        }
     }
 
     private void updateUniformBuffer(int currentImage) {

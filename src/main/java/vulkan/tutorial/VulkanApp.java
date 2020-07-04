@@ -55,7 +55,7 @@ class VulkanApp {
     private static final Set<String> REQUIRED_DEVICE_EXTENSIONS = Set.of(KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME, NVRayTracing.VK_NV_RAY_TRACING_EXTENSION_NAME);
     private static final int UINT32_MAX = 0xFFFFFFFF;
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
-    private static final long UINT64_MAX = 0xFFFFFFFFFFFFFFFFL;
+    private static final long NO_TIMEOUT = 0xFFFFFFFFFFFFFFFFL; // UINT64_MAX
 
     private VkInstance vkInstance;
     private long surface;
@@ -656,11 +656,11 @@ class VulkanApp {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             Frame thisFrame = this.inFlightFrames.get(this.currentFrame);
 
-            VK10.vkWaitForFences(this.vkDevice, thisFrame.pFence(), true, UINT64_MAX);
+            VK10.vkWaitForFences(this.vkDevice, thisFrame.pFence(), true, NO_TIMEOUT);
 
             IntBuffer pImageIndex = stack.mallocInt(1);
 
-            int vkResult = KHRSwapchain.vkAcquireNextImageKHR(this.vkDevice, this.swapChain, UINT64_MAX, thisFrame.getImageAvailableSemaphore(), VK10.VK_NULL_HANDLE, pImageIndex);
+            int vkResult = KHRSwapchain.vkAcquireNextImageKHR(this.vkDevice, this.swapChain, NO_TIMEOUT, thisFrame.getImageAvailableSemaphore(), VK10.VK_NULL_HANDLE, pImageIndex);
 
             if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR) {
                 recreateSwapChain();
@@ -674,7 +674,7 @@ class VulkanApp {
             updateUniformBuffer(imageIndex);
 
             if (this.imagesInFlight.containsKey(imageIndex)) {
-                VK10.vkWaitForFences(this.vkDevice, this.imagesInFlight.get(imageIndex).getFence(), true, UINT64_MAX);
+                VK10.vkWaitForFences(this.vkDevice, this.imagesInFlight.get(imageIndex).getFence(), true, NO_TIMEOUT);
             }
 
             this.imagesInFlight.put(imageIndex, thisFrame);
@@ -1260,9 +1260,11 @@ class VulkanApp {
             VkRenderPassBeginInfo renderPassInfo = VkRenderPassBeginInfo.callocStack(stack);
             renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
             renderPassInfo.renderPass(this.renderPass);
+
             VkRect2D renderArea = VkRect2D.callocStack(stack);
             renderArea.offset(VkOffset2D.callocStack(stack).set(0, 0));
             renderArea.extent(this.swapChainExtent);
+
             renderPassInfo.renderArea(renderArea);
 
             VkClearValue.Buffer clearValues = VkClearValue.callocStack(2, stack);

@@ -102,7 +102,7 @@ class VulkanApp {
 
     private Window window;
     private ValidationLayers validationLayers;
-    private GameObject gameObject;
+    private GameObject sceneObject;
 
     private long vertexBuffer;
     private long vertexBufferMemory;
@@ -377,7 +377,7 @@ class VulkanApp {
         }
     }
 
-    private static void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkDevice vkDevice, long commandPool, VkQueue vkGraphicsQueue) {
+    private static void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkDevice vkDevice, long commandPool, VkQueue vkQueue) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VK10.vkEndCommandBuffer(commandBuffer);
 
@@ -385,8 +385,18 @@ class VulkanApp {
             submitInfo.sType(VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO);
             submitInfo.pCommandBuffers(stack.pointers(commandBuffer));
 
-            VK10.vkQueueSubmit(vkGraphicsQueue, submitInfo, VK10.VK_NULL_HANDLE);
-            VK10.vkQueueWaitIdle(vkGraphicsQueue);
+            int returnCode = VK10.vkQueueSubmit(vkQueue, submitInfo, VK10.VK_NULL_HANDLE);
+
+            if (returnCode != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Queue submit returned the failure code: " + returnCode);
+            }
+
+            returnCode = VK10.vkQueueWaitIdle(vkQueue);
+
+            if (returnCode != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Wait for Queue returned the failure code: " + returnCode);
+            }
+
             VK10.vkFreeCommandBuffers(vkDevice, commandPool, commandBuffer);
         }
     }
@@ -563,7 +573,7 @@ class VulkanApp {
             LongBuffer pRenderPass = stack.mallocLong(1);
 
             if (VK10.vkCreateRenderPass(vkDevice, renderPassInfo, null, pRenderPass) != VK10.VK_SUCCESS) {
-                throw new RuntimeException("Failed to create redner pass");
+                throw new RuntimeException("Failed to create render pass");
             }
 
             return pRenderPass.get(0);
@@ -640,7 +650,7 @@ class VulkanApp {
         this.vkPresentQueue = createPresentationQueue(this.vkDevice, queueFamilyIndices);
         this.commandPool = createCommandPool(this.vkDevice, queueFamilyIndices);
 
-        this.gameObject = GameObjectLoader.loadModel("models/chalet.obj");
+        this.sceneObject = GameObjectLoader.loadModel("models/chalet.obj");
 
         createTextureImage();
         createTextureImageView();
@@ -649,11 +659,15 @@ class VulkanApp {
 
         createVertexBuffer();
         createIndexBuffer();
-        createDescriptorSetLayout();
-        createSwapChainObjects();
-        createSyncObjects();
+
         initRayTracing();
         sceneObjectToBlas();
+
+        createDescriptorSetLayout();
+
+
+        createSwapChainObjects();
+        createSyncObjects();
     }
 
     private void initRayTracing() {
@@ -678,25 +692,20 @@ class VulkanApp {
 
     public void sceneObjectToBlas() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            //either AABBs or Traingles we will try triangles first
-//            VkGeometryAABBNV vkGeometryAABBNV = VkGeometryAABBNV.callocStack(stack);
-
-            //i think actual data
             VkGeometryTrianglesNV vkGeometryTrianglesNV = VkGeometryTrianglesNV.callocStack(stack);
             vkGeometryTrianglesNV.sType(NVRayTracing.VK_STRUCTURE_TYPE_GEOMETRY_TRIANGLES_NV);
-//            createVertexBuffer(); //hopefully this creates the buffer as needed
             vkGeometryTrianglesNV.vertexData(this.vertexBuffer);
             vkGeometryTrianglesNV.vertexOffset(0); //Vertex.SIZEOF * this.gameObject.getVertices().length);
-            vkGeometryTrianglesNV.vertexCount(this.gameObject.getVertices().length);
+            vkGeometryTrianglesNV.vertexCount(this.sceneObject.getVertices().length / 3);
             vkGeometryTrianglesNV.vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT); //TODO idk
-//            createIndexBuffer(); //hopefully this creates the buffer as needed
+            vkGeometryTrianglesNV.vertexStride(Vertex.SIZEOF * this.sceneObject.getIndices().length);
             vkGeometryTrianglesNV.indexData(this.indexBuffer);
             vkGeometryTrianglesNV.indexType(VK10.VK_INDEX_TYPE_UINT32);
             vkGeometryTrianglesNV.indexOffset(0); //Integer.BYTES * this.gameObject.getIndices().length);
-            vkGeometryTrianglesNV.indexCount(this.gameObject.getIndices().length);
+            vkGeometryTrianglesNV.indexCount(this.sceneObject.getIndices().length);
 
             vkGeometryTrianglesNV.transformData(VK10.VK_NULL_HANDLE);//Model transformation matrix data
-            vkGeometryTrianglesNV.transformOffset(0);
+//            vkGeometryTrianglesNV.transformOffset(0);
 
             VkGeometryAABBNV aabbnv = VkGeometryAABBNV.callocStack(stack);
             aabbnv.sType(NVRayTracing.VK_STRUCTURE_TYPE_GEOMETRY_AABB_NV);
@@ -714,7 +723,7 @@ class VulkanApp {
 
             VkAccelerationStructureInfoNV accelerationStructureInfoNV = VkAccelerationStructureInfoNV.callocStack(stack);
             accelerationStructureInfoNV.sType(NVRayTracing.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_INFO_NV);
-            accelerationStructureInfoNV.flags(NVRayTracing.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_NV);
+            accelerationStructureInfoNV.flags(NVRayTracing.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_NV);
             accelerationStructureInfoNV.pGeometries(vkGeometryNV);
             accelerationStructureInfoNV.type(NVRayTracing.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_NV);
 
@@ -723,11 +732,11 @@ class VulkanApp {
             accelerationStructureCreateInfoNV.sType(NVRayTracing.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_NV);
             accelerationStructureCreateInfoNV.info(accelerationStructureInfoNV);
 
-            LongBuffer pDescriptorPool = stack.mallocLong(1);
+            LongBuffer pBlas = stack.mallocLong(1);
 
-            NVRayTracing.vkCreateAccelerationStructureNV(this.vkDevice, accelerationStructureCreateInfoNV, null, pDescriptorPool);
+            NVRayTracing.vkCreateAccelerationStructureNV(this.vkDevice, accelerationStructureCreateInfoNV, null, pBlas);
 
-            this.blas = pDescriptorPool.get(0);
+            this.blas = pBlas.get(0);
 
             VkAccelerationStructureMemoryRequirementsInfoNV memoryRequirementsInfoNV = VkAccelerationStructureMemoryRequirementsInfoNV.callocStack(stack);
             memoryRequirementsInfoNV.sType(NVRayTracing.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_MEMORY_REQUIREMENTS_INFO_NV);
@@ -735,18 +744,18 @@ class VulkanApp {
             memoryRequirementsInfoNV.accelerationStructure(this.blas);
 
             VkMemoryRequirements2KHR memoryRequirements = VkMemoryRequirements2KHR.mallocStack(stack);
-
-            LongBuffer pBlasMemory = stack.mallocLong(1);
-
             NVRayTracing.vkGetAccelerationStructureMemoryRequirementsNV(this.vkDevice, memoryRequirementsInfoNV, memoryRequirements);
+
+            System.out.println("FirstMemorySize: " + memoryRequirements.memoryRequirements().size());
 
             VkMemoryAllocateInfo memoryAllocateInfo = VkMemoryAllocateInfo.callocStack(stack);
             memoryAllocateInfo.sType(VK10.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
             memoryAllocateInfo.allocationSize(memoryRequirements.memoryRequirements().size());
             memoryAllocateInfo.memoryTypeIndex(VulkanUtils.extractTheCorrectMemoryTypeFromPhysicalDevice(memoryRequirements.memoryRequirements().memoryTypeBits(), VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, this.vkPhysicalDevice));
 
+            LongBuffer pBlasMemory = stack.mallocLong(1);
             if (VK10.vkAllocateMemory(this.vkDevice, memoryAllocateInfo, null, pBlasMemory) != VK10.VK_SUCCESS) {
-                System.out.println("Could not allocate memory for acceleration structure");
+                throw new RuntimeException("Could not allocate memory for acceleration structure");
             }
 
             this.blasMemory = pBlasMemory.get(0);
@@ -758,36 +767,68 @@ class VulkanApp {
 
             NVRayTracing.vkBindAccelerationStructureMemoryNV(this.vkDevice, bind);
 
-            //Estimate scratch memory
+            //Estimate scratch memory size
             VkAccelerationStructureMemoryRequirementsInfoNV scratchMemoReq = VkAccelerationStructureMemoryRequirementsInfoNV.callocStack(stack);
             scratchMemoReq.sType(NVRayTracing.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_MEMORY_REQUIREMENTS_INFO_NV);
             scratchMemoReq.type(NVRayTracing.VK_ACCELERATION_STRUCTURE_MEMORY_REQUIREMENTS_TYPE_BUILD_SCRATCH_NV);
             scratchMemoReq.accelerationStructure(this.blas);
 
             VkMemoryRequirements2KHR memoryRequirementsForScratch = VkMemoryRequirements2KHR.mallocStack(stack);
-
             NVRayTracing.vkGetAccelerationStructureMemoryRequirementsNV(this.vkDevice, scratchMemoReq, memoryRequirementsForScratch);
 
-            long scratchMemory = memoryRequirementsForScratch.memoryRequirements().size();
+            long scratchMemorySize = memoryRequirementsForScratch.memoryRequirements().size();
+
+            System.out.println("ScratchMemorySize: " + scratchMemorySize);
 
             //These two LongBuffers represent the nvvk::Buffer from the tutorial
-            LongBuffer pStagingBuffer = stack.mallocLong(1);
-            LongBuffer pStagingBufferMemory = stack.mallocLong(1);
+            LongBuffer pScratchBuffer = stack.mallocLong(1);
+            LongBuffer pScratchBufferMemory = stack.mallocLong(1);
 
-            createAllocateBindBuffer(scratchMemory, NVRayTracing.VK_BUFFER_USAGE_RAY_TRACING_BIT_NV, VK10.VK_MEMORY_HEAP_DEVICE_LOCAL_BIT, pStagingBuffer, pStagingBufferMemory, this.vkDevice, this.vkPhysicalDevice);
+            createAllocateBindBuffer(scratchMemorySize,
+                    NVRayTracing.VK_BUFFER_USAGE_RAY_TRACING_BIT_NV,
+                    VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    pScratchBuffer,
+                    pScratchBufferMemory,
+                    this.vkDevice,
+                    this.vkPhysicalDevice);
 
-            VkQueryPoolCreateInfo queryPoolCreateInfo = VkQueryPoolCreateInfo.callocStack(stack);
-            queryPoolCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO);
-            queryPoolCreateInfo.queryCount(1); //if loop then change size here
-            queryPoolCreateInfo.queryType(NVRayTracing.VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_NV);
+            long scratchHandle = pScratchBuffer.get(0);
 
-            LongBuffer pQueryPool = stack.mallocLong(1);
+            VkCommandBuffer commandBuffer = beginSingleTimeCommands(this.vkDevice, this.commandPool);
 
-            VK10.vkCreateQueryPool(this.vkDevice, queryPoolCreateInfo, null, pQueryPool);
+            //TODO :: it could be that the problem is how the vertex and index buffers are created
+            //when the vkMapMemory copying is not executed this method call returns VK_SUCCESS
+            //it would maybe help to read that part of the tutorial again :: ibikov
+            NVRayTracing.vkCmdBuildAccelerationStructureNV(commandBuffer,
+                    accelerationStructureCreateInfoNV.info(),
+                    VK10.VK_NULL_HANDLE,
+                    0,
+                    false,
+                    this.blas,
+                    VK10.VK_NULL_HANDLE,
+                    scratchHandle,
+                    0);
 
-            VK10.vkDestroyBuffer(this.vkDevice, pStagingBuffer.get(0), null);
-            VK10.vkFreeMemory(this.vkDevice, pStagingBufferMemory.get(0), null);
-            VK10.vkDestroyQueryPool(this.vkDevice, pQueryPool.get(0), null);
+            VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.callocStack(1, stack);
+            barrier.sType(VK10.VK_STRUCTURE_TYPE_MEMORY_BARRIER);
+            barrier.srcAccessMask(NVRayTracing.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_NV);
+            barrier.dstAccessMask(NVRayTracing.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_NV);
+
+            VK10.vkCmdPipelineBarrier(commandBuffer,
+                    NVRayTracing.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV,
+                    NVRayTracing.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV,
+                    0,
+                    barrier,
+                    null,
+                    null);
+
+            endSingleTimeCommands(commandBuffer, this.vkDevice, this.commandPool, this.vkGraphicsQueue);
+
+
+            VK10.vkDestroyBuffer(this.vkDevice, pScratchBuffer.get(0), null);
+            VK10.vkFreeMemory(this.vkDevice, pScratchBufferMemory.get(0), null);
+
+            System.out.println("finished BLAS");
         }
     }
 
@@ -1068,7 +1109,7 @@ class VulkanApp {
 
     private void createIndexBuffer() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            long bufferSize = Integer.BYTES * this.gameObject.getIndices().length;
+            long bufferSize = Integer.BYTES * this.sceneObject.getIndices().length;
 
             LongBuffer pBuffer = stack.mallocLong(1);
             LongBuffer pBufferMemory = stack.mallocLong(1);
@@ -1086,7 +1127,7 @@ class VulkanApp {
 
             VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
             {
-                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getIndices());
+                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, (int) bufferSize), this.sceneObject.getIndices());
             }
             VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -1108,10 +1149,11 @@ class VulkanApp {
 
     private void createVertexBuffer() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            long bufferSize = Vertex.SIZEOF * this.gameObject.getVertices().length;
+            long bufferSize = Vertex.SIZEOF * this.sceneObject.getVertices().length;
 
             LongBuffer pBuffer = stack.mallocLong(1);
             LongBuffer pBufferMemory = stack.mallocLong(1);
+
             createAllocateBindBuffer(bufferSize, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                     VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                     pBuffer,
@@ -1124,7 +1166,7 @@ class VulkanApp {
 
             VK10.vkMapMemory(this.vkDevice, stagingBufferMemory, 0, bufferSize, 0, data);
             {
-                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, (int) bufferSize), this.gameObject.getVertices());
+                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, (int) bufferSize), this.sceneObject.getVertices());
             }
             VK10.vkUnmapMemory(this.vkDevice, stagingBufferMemory);
 
@@ -1433,7 +1475,7 @@ class VulkanApp {
                     VK10.vkCmdBindDescriptorSets(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
                             this.pipelineLayout, 0, stack.longs(this.descriptorSets.get(i)), null);
 
-                    VK10.vkCmdDrawIndexed(commandBuffer, this.gameObject.getIndices().length, 1, 0, 0, 0);
+                    VK10.vkCmdDrawIndexed(commandBuffer, this.sceneObject.getIndices().length, 1, 0, 0, 0);
                 }
                 VK10.vkCmdEndRenderPass(commandBuffer);
 

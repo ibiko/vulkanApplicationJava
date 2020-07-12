@@ -4,6 +4,13 @@ public class VkGeometryInstanceNV {
 
     public static final int SIZE_OF = 12 * Float.BYTES + 4 * Integer.BYTES + Long.BYTES;
 
+    public static final int OFFSETOF_TRANSFORM = 0;
+    public static final int OFFSETOF_INSTANCE_ID = 12 * Float.BYTES;
+    public static final int OFFSETOF_MASK = 12 * Float.BYTES + Integer.BYTES;
+    public static final int OFFSETOF_HITGROUP = 12 * Float.BYTES + 2 * Integer.BYTES;
+    public static final int OFFSETOF_FLAGS = 12 * Float.BYTES + 3 * Integer.BYTES;
+    public static final int OFFSETOF_ACC_STRUCT_HANDLE = 12 * Float.BYTES + 4 * Integer.BYTES;
+
     /// Transform matrix, containing only the top 3 rows
     private float[] transform = new float[12];
     /// Instance index

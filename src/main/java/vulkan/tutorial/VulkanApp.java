@@ -133,6 +133,8 @@ class VulkanApp {
     private long rtStorageImage;
     private long rtStorageImageMemory;
     private long rtStorageImageView;
+    private long rtPipelineLayout;
+    private long rtPipeline;
 
     private static long createTextureSampler(VkDevice vkDevice, int mipLevels) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -720,7 +722,7 @@ class VulkanApp {
             LongBuffer pBufferMemory = stack.mallocLong(1);
 
             createAllocateBindBuffer(bufferSize,
-                    VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                    VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                     pBuffer,
                     pBufferMemory, this.vkDevice, this.vkPhysicalDevice);
@@ -737,7 +739,8 @@ class VulkanApp {
             LongBuffer pBuffer = stack.mallocLong(1);
             LongBuffer pBufferMemory = stack.mallocLong(1);
 
-            createAllocateBindBuffer(bufferSize, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            createAllocateBindBuffer(bufferSize,
+                    VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                     pBuffer,
                     pBufferMemory, this.vkDevice, this.vkPhysicalDevice);
@@ -893,22 +896,22 @@ class VulkanApp {
 
             NVRayTracing.vkGetAccelerationStructureHandleNV(this.vkDevice, this.blas, blasHandle);
 
-            float[] floatbaby = new float[12];
-            floatbaby[0] = 0L;
-            floatbaby[1] = 0L;
-            floatbaby[2] = 0L;
-            floatbaby[3] = 0L;
+            float[] identity = new float[12];
+            identity[0] = 1.0f;
+            identity[1] = 0;
+            identity[2] = 0;
+            identity[3] = 0;
 
-            floatbaby[4] = 0L;
-            floatbaby[5] = 0L;
-            floatbaby[6] = 0L;
-            floatbaby[7] = 0L;
+            identity[4] = 0;
+            identity[5] = 1.0f;
+            identity[6] = 0;
+            identity[7] = 0;
 
-            floatbaby[8] = 0L;
-            floatbaby[9] = 0L;
-            floatbaby[10] = 0L;
-            floatbaby[11] = 0L;
-            return new VkGeometryInstanceNV(floatbaby, 1, 0xFF, 1, NVRayTracing.VK_GEOMETRY_INSTANCE_TRIANGLE_CULL_DISABLE_BIT_NV, blasHandle.get(0));
+            identity[8] = 0;
+            identity[9] = 0;
+            identity[10] = 1.0f;
+            identity[11] = 0;
+            return new VkGeometryInstanceNV(identity, 1, 0xFF, 1, NVRayTracing.VK_GEOMETRY_INSTANCE_TRIANGLE_CULL_DISABLE_BIT_NV, blasHandle.get(0));
         }
     }
 
@@ -1113,7 +1116,6 @@ class VulkanApp {
             VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.callocStack(1, stack);
             imageInfo.imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
             imageInfo.imageView(this.rtStorageImageView);
-            imageInfo.sampler(VK10.VK_NULL_HANDLE);
 
             VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.callocStack(2, stack);
 
@@ -1125,18 +1127,18 @@ class VulkanApp {
             accelStructDescriptorWrite.descriptorCount(1);
             accelStructDescriptorWrite.pNext(accStructureDesc.address());
 
-            VkWriteDescriptorSet samplerDescriptorWrite = descriptorWrites.get(1);
-            samplerDescriptorWrite.sType(VK10.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-            samplerDescriptorWrite.dstBinding(3);
-            samplerDescriptorWrite.dstArrayElement(0);
-            samplerDescriptorWrite.descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-            samplerDescriptorWrite.descriptorCount(1);
-            samplerDescriptorWrite.pImageInfo(imageInfo);
+            VkWriteDescriptorSet imageStorageDescriptorWrite = descriptorWrites.get(1);
+            imageStorageDescriptorWrite.sType(VK10.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+            imageStorageDescriptorWrite.dstBinding(3);
+            imageStorageDescriptorWrite.dstArrayElement(0);
+            imageStorageDescriptorWrite.descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+            imageStorageDescriptorWrite.descriptorCount(1);
+            imageStorageDescriptorWrite.pImageInfo(imageInfo);
 
             for (int i = 0; i < pDescriptorSets.capacity(); i++) {
                 long descriptorSet = pDescriptorSets.get(i);
                 accelStructDescriptorWrite.dstSet(descriptorSet);
-                samplerDescriptorWrite.dstSet(descriptorSet);
+                imageStorageDescriptorWrite.dstSet(descriptorSet);
                 VK10.vkUpdateDescriptorSets(this.vkDevice, descriptorWrites, null);
                 this.rtDescriptorSets.add(descriptorSet);
             }
@@ -1574,6 +1576,7 @@ class VulkanApp {
         createImageViews();
         this.renderPass = createRenderPass(this.swapChainImageFormat, this.msaaSamples, this.vkDevice, this.vkPhysicalDevice);
         createGraphicsPipeline();
+
         createColorResources();
         createDepthResources();
 
@@ -1588,6 +1591,7 @@ class VulkanApp {
         createDescriptorSets();
 
         createRtDescriptorSets();
+        createRtGraphicsPipeline();
 
         createCommandBuffers();
     }
@@ -1743,14 +1747,15 @@ class VulkanApp {
             uboLayoutBinding.descriptorCount(1);
             uboLayoutBinding.descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
             uboLayoutBinding.pImmutableSamplers(null);
-            uboLayoutBinding.stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT);
+            uboLayoutBinding.stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT | NVRayTracing.VK_SHADER_STAGE_RAYGEN_BIT_NV);
+
 
             VkDescriptorSetLayoutBinding samplerLayoutBinding = bindings.get(1);
             samplerLayoutBinding.binding(1);
             samplerLayoutBinding.descriptorCount(1);
             samplerLayoutBinding.descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
             samplerLayoutBinding.pImmutableSamplers(null);
-            samplerLayoutBinding.stageFlags(VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
+            samplerLayoutBinding.stageFlags(VK10.VK_SHADER_STAGE_FRAGMENT_BIT | NVRayTracing.VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV);
 
             VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.callocStack(stack);
             layoutInfo.sType(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
@@ -2037,6 +2042,129 @@ class VulkanApp {
         }
     }
 
+    private void createRtGraphicsPipeline(){
+        try(MemoryStack stack = MemoryStack.stackPush()) {
+            SPIRV rayGenShader = ShaderSPIRVUtils.compileShaderFile("shaders/raytrace.rgen", ShaderKind.RAYGEN_SHADER);
+            SPIRV missShader = ShaderSPIRVUtils.compileShaderFile("shaders/raytrace.rmiss", ShaderKind.MISS_SHADER);
+
+            long rayGenShaderModule = createShaderModule(rayGenShader.byteCode());
+            long missShaderModule = createShaderModule(missShader.byteCode());
+
+            ByteBuffer entryPoint = stack.UTF8("main");
+
+            VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.callocStack(3, stack);
+            VkRayTracingShaderGroupCreateInfoNV.Buffer shaderGroup = VkRayTracingShaderGroupCreateInfoNV.callocStack(3, stack);
+
+
+            VkRayTracingShaderGroupCreateInfoNV rayGenGroup = shaderGroup.get(0);
+            rayGenGroup.sType(NVRayTracing.VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_NV);
+            rayGenGroup.type(NVRayTracing.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_NV);
+            rayGenGroup.anyHitShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+            rayGenGroup.closestHitShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+            rayGenGroup.intersectionShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+
+            //Index binding 0
+            VkPipelineShaderStageCreateInfo rayGenShaderStageInfo = shaderStages.get(0);
+            rayGenShaderStageInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            rayGenShaderStageInfo.stage(NVRayTracing.VK_SHADER_STAGE_RAYGEN_BIT_NV);
+            rayGenShaderStageInfo.module(rayGenShaderModule);
+            rayGenShaderStageInfo.pName(entryPoint);
+
+            //Index binding 0
+            rayGenGroup.generalShader(0);
+
+            VkRayTracingShaderGroupCreateInfoNV missGroup = shaderGroup.get(1);
+            missGroup.sType(NVRayTracing.VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_NV);
+            missGroup.type(NVRayTracing.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_NV);
+            missGroup.anyHitShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+            missGroup.closestHitShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+            missGroup.intersectionShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+
+            //Index binding 1
+            VkPipelineShaderStageCreateInfo missShaderStageInfo = shaderStages.get(1);
+            missShaderStageInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            missShaderStageInfo.stage(NVRayTracing.VK_SHADER_STAGE_MISS_BIT_NV);
+            missShaderStageInfo.module(missShaderModule);
+            missShaderStageInfo.pName(entryPoint);
+
+            //Index binding 1
+            missGroup.generalShader(1);
+
+            SPIRV closestHitShader = ShaderSPIRVUtils.compileShaderFile("shaders/raytrace.rchit", ShaderKind.CLOSEST_HIT_SHADER);
+
+            long closestHitModule = createShaderModule(closestHitShader.byteCode());
+
+            VkRayTracingShaderGroupCreateInfoNV hitGroup = shaderGroup.get(2);
+            hitGroup.sType(NVRayTracing.VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_NV);
+            hitGroup.type(NVRayTracing.VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_NV);
+            hitGroup.anyHitShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+            hitGroup.generalShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+            hitGroup.intersectionShader(NVRayTracing.VK_SHADER_UNUSED_NV);
+
+            //Index binding 2
+            VkPipelineShaderStageCreateInfo closestHitInfo = shaderStages.get(2);
+            closestHitInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            closestHitInfo.stage(NVRayTracing.VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV);
+            closestHitInfo.module(closestHitModule);
+            closestHitInfo.pName(entryPoint);
+
+            //Index binding 2
+            hitGroup.closestHitShader(2);
+
+            VkPushConstantRange.Buffer pushConstant = VkPushConstantRange.callocStack(1, stack);
+            pushConstant.stageFlags(NVRayTracing.VK_SHADER_STAGE_RAYGEN_BIT_NV | NVRayTracing.VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV | NVRayTracing.VK_SHADER_STAGE_MISS_BIT_NV);
+            pushConstant.offset(0);
+            pushConstant.size(RtPushConstant.SIZE_OF);
+
+            LongBuffer layouts = stack.mallocLong(this.swapChainImages.size());
+            for (int i = 0; i < layouts.capacity(); i++) {
+                layouts.put(i, this.rtDescriptorSetLayout);
+            }
+
+//            for (int i = 0; i < layouts.capacity(); i++) {
+//                layouts.put(i, this.descriptorSetLayout);
+//            }
+
+            VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = VkPipelineLayoutCreateInfo.callocStack(stack);
+            pipelineLayoutCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+            pipelineLayoutCreateInfo.pPushConstantRanges(pushConstant);
+            pipelineLayoutCreateInfo.pSetLayouts(layouts);
+
+            LongBuffer pPipelineLayout = stack.longs(VK10.VK_NULL_HANDLE);
+
+            if (VK10.vkCreatePipelineLayout(this.vkDevice, pipelineLayoutCreateInfo, null, pPipelineLayout) != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to RT create pipeline layout");
+            }
+
+            this.rtPipelineLayout = pPipelineLayout.get(0);
+
+            VkRayTracingPipelineCreateInfoNV.Buffer rayTracingPipeline = VkRayTracingPipelineCreateInfoNV.callocStack(1, stack);
+            rayTracingPipeline.sType(NVRayTracing.VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_NV);
+            rayTracingPipeline.pStages(shaderStages);
+            rayTracingPipeline.pGroups(shaderGroup);
+            rayTracingPipeline.maxRecursionDepth(1);
+            rayTracingPipeline.layout(this.rtPipelineLayout);
+
+            LongBuffer pRayTracingPipeline = stack.longs(VK10.VK_NULL_HANDLE);
+
+            if(NVRayTracing.vkCreateRayTracingPipelinesNV(this.vkDevice, VK10.VK_NULL_HANDLE, rayTracingPipeline, null, pRayTracingPipeline) != VK10.VK_SUCCESS){
+                throw new RuntimeException("Failed to create RT pipeline layout");
+            }
+
+            this.rtPipeline = pRayTracingPipeline.get(0);
+
+            // ===> RELEASE RT RESOURCES <===
+
+            VK10.vkDestroyShaderModule(this.vkDevice, rayGenShaderModule, null);
+            VK10.vkDestroyShaderModule(this.vkDevice, missShaderModule, null);
+            VK10.vkDestroyShaderModule(this.vkDevice, closestHitModule, null);
+
+            rayGenShader.free();
+            missShader.free();
+            closestHitShader.free();
+        }
+    }
+
     private long createShaderModule(ByteBuffer spirvCode) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkShaderModuleCreateInfo createInfo = VkShaderModuleCreateInfo.callocStack(stack);
@@ -2212,6 +2340,10 @@ class VulkanApp {
         VK10.vkFreeCommandBuffers(this.vkDevice, this.commandPool, LwjglAdapter.asPointBuffer(this.commandBuffers));
         VK10.vkDestroyPipeline(this.vkDevice, this.graphicsPipeline, null);
         VK10.vkDestroyPipelineLayout(this.vkDevice, this.pipelineLayout, null);
+
+        VK10.vkDestroyPipeline(this.vkDevice, this.rtPipeline, null);
+        VK10.vkDestroyPipelineLayout(this.vkDevice, this.rtPipelineLayout, null);
+
         VK10.vkDestroyRenderPass(this.vkDevice, this.renderPass, null);
         this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.vkDevice, imageView, null));
         KHRSwapchain.vkDestroySwapchainKHR(this.vkDevice, this.swapChain, null);

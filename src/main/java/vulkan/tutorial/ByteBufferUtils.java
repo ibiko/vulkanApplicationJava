@@ -3,6 +3,7 @@ package vulkan.tutorial;
 import vulkan.tutorial.math.Vertex;
 import vulkan.tutorial.shader.AlignmentUtils;
 import vulkan.tutorial.shader.UniformBufferObject;
+import vulkan.tutorial.vulkan.VkGeometryInstanceNV;
 
 import java.nio.ByteBuffer;
 
@@ -47,5 +48,15 @@ public class ByteBufferUtils {
             byteBuffer.putFloat(vertex.getTexCoords().x());
             byteBuffer.putFloat(vertex.getTexCoords().y());
         }
+    }
+
+    public static void copyIntoBuffer(ByteBuffer byteBuffer, VkGeometryInstanceNV geometry) {
+        for (int i = 0; i < geometry.getTransform().length; i++) {
+            byteBuffer.putFloat(geometry.getTransform()[i]);
+        }
+            byteBuffer.putLong(geometry.getAccelerationStructureHandle());
+            byteBuffer.putInt(geometry.getHitGroupId());
+            byteBuffer.putInt(geometry.getInstanceId());
+            byteBuffer.putInt(geometry.getMask());
     }
 }

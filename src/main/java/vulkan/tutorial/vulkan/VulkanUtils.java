@@ -64,6 +64,7 @@ public class VulkanUtils {
                 return formats.get(i);
             }
         }
+        System.out.println("VK_PRESENT_MODE_MAILBOX_KHR not supported! VK_PRESENT_MODE_FIFO_KHR will be used as a fallback instead");
         return KHRSurface.VK_PRESENT_MODE_FIFO_KHR;
     }
 

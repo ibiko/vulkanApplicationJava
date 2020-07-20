@@ -59,4 +59,10 @@ public class ByteBufferUtils {
             byteBuffer.putInt(geometry.getInstanceId());
             byteBuffer.putInt(geometry.getMask());
     }
+
+    public static void copyIntoBufferNew(ByteBuffer dst, ByteBuffer src, int groupHandleSize, int groupCount) {
+        dst.put(0, src.get(0));
+        dst.put(1, src.get(1));
+        dst.put(2, src.get(2));
+    }
 }

@@ -136,6 +136,9 @@ class VulkanApp {
     private long rtPipelineLayout;
     private long rtPipeline;
 
+    private long sbtBuffer;
+    private long sbtBufferMemory;
+
     private static long createTextureSampler(VkDevice vkDevice, int mipLevels) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo samplerCreateInfo = VkSamplerCreateInfo.callocStack(stack);
@@ -704,12 +707,14 @@ class VulkanApp {
 
             VK11.vkGetPhysicalDeviceProperties2(this.vkPhysicalDevice, props2);
 
+
             int maxRecursionDepth = physicalDeviceRayTracingPropertiesNV.maxRecursionDepth();
             int shaderGroupHandleSize = physicalDeviceRayTracingPropertiesNV.shaderGroupHandleSize();
 
             System.out.println("maxPushConstantSize: " + props2.properties().limits().maxPushConstantsSize());
             System.out.println("maxRecursion: " + maxRecursionDepth);
             System.out.println("shaderGroupHandleSize: " + shaderGroupHandleSize);
+            System.out.println("shaderGroupBaseAlignment: " + physicalDeviceRayTracingPropertiesNV.shaderGroupBaseAlignment());
 
         }
     }
@@ -1592,6 +1597,7 @@ class VulkanApp {
 
         createRtDescriptorSets();
         createRtGraphicsPipeline();
+        createRtShaderBindingTable();
 
         createCommandBuffers();
     }
@@ -2042,8 +2048,8 @@ class VulkanApp {
         }
     }
 
-    private void createRtGraphicsPipeline(){
-        try(MemoryStack stack = MemoryStack.stackPush()) {
+    private void createRtGraphicsPipeline() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
             SPIRV rayGenShader = ShaderSPIRVUtils.compileShaderFile("shaders/raytrace.rgen", ShaderKind.RAYGEN_SHADER);
             SPIRV missShader = ShaderSPIRVUtils.compileShaderFile("shaders/raytrace.rmiss", ShaderKind.MISS_SHADER);
 
@@ -2147,7 +2153,7 @@ class VulkanApp {
 
             LongBuffer pRayTracingPipeline = stack.longs(VK10.VK_NULL_HANDLE);
 
-            if(NVRayTracing.vkCreateRayTracingPipelinesNV(this.vkDevice, VK10.VK_NULL_HANDLE, rayTracingPipeline, null, pRayTracingPipeline) != VK10.VK_SUCCESS){
+            if (NVRayTracing.vkCreateRayTracingPipelinesNV(this.vkDevice, VK10.VK_NULL_HANDLE, rayTracingPipeline, null, pRayTracingPipeline) != VK10.VK_SUCCESS) {
                 throw new RuntimeException("Failed to create RT pipeline layout");
             }
 
@@ -2162,6 +2168,39 @@ class VulkanApp {
             rayGenShader.free();
             missShader.free();
             closestHitShader.free();
+        }
+    }
+
+    private void createRtShaderBindingTable() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            int groupCount = 3; //raygen, miss, chit
+            int groupHandleSize = 16;
+            int groupAlignment = 63;
+
+            int sbtSize = groupCount * groupAlignment;
+
+            ByteBuffer shaderHandleStorage = stack.malloc(sbtSize);
+            NVRayTracing.vkGetRayTracingShaderGroupHandlesNV(this.vkDevice, this.rtPipeline, 0, groupCount, shaderHandleStorage);
+
+            LongBuffer pBuffer = stack.mallocLong(1);
+            LongBuffer pBufferMemory = stack.mallocLong(1);
+
+            createAllocateBindBuffer(sbtSize,
+                    VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    pBuffer,
+                    pBufferMemory, this.vkDevice, this.vkPhysicalDevice);
+
+            this.sbtBuffer = pBuffer.get(0);
+            this.sbtBufferMemory = pBufferMemory.get(0);
+
+            PointerBuffer data = stack.mallocPointer(sbtSize);
+            VK10.vkMapMemory(this.vkDevice, this.sbtBufferMemory, 0, sbtSize, 0, data);
+            {
+                //TODO maybe this needs to be changed, it will be shown if the traceRaysNV doesnt work :: ibikov
+                ByteBufferUtils.copyIntoBufferNew(data.getByteBuffer(0, sbtSize), shaderHandleStorage, groupHandleSize, groupCount);
+            }
+            VK10.vkUnmapMemory(this.vkDevice, this.sbtBufferMemory);
         }
     }
 
@@ -2343,6 +2382,9 @@ class VulkanApp {
 
         VK10.vkDestroyPipeline(this.vkDevice, this.rtPipeline, null);
         VK10.vkDestroyPipelineLayout(this.vkDevice, this.rtPipelineLayout, null);
+
+        VK10.vkDestroyBuffer(this.vkDevice, this.sbtBuffer, null);
+        VK10.vkFreeMemory(this.vkDevice, this.sbtBufferMemory, null);
 
         VK10.vkDestroyRenderPass(this.vkDevice, this.renderPass, null);
         this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.vkDevice, imageView, null));

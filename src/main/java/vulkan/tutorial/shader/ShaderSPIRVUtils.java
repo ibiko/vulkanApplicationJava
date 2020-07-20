@@ -36,19 +36,19 @@ public class ShaderSPIRVUtils {
             throw new RuntimeException("Failed to create shader compiler");
         }
 
-        long result = Shaderc.shaderc_compile_into_spv(compiler, source, shaderKind.getKind(), filename, "main", MemoryUtil.NULL);
+        long compileResult = Shaderc.shaderc_compile_into_spv(compiler, source, shaderKind.getKind(), filename, "main", MemoryUtil.NULL);
 
-        if (result == MemoryUtil.NULL) {
+        if (compileResult == MemoryUtil.NULL) {
             throw new RuntimeException("Failed to compile shader " + filename + " into SPIR-V");
         }
 
-        if (Shaderc.shaderc_result_get_compilation_status(result) != Shaderc.shaderc_compilation_status_success) {
-            throw new RuntimeException("Failed to compile shader " + filename + " into SPIR-V:\n" + Shaderc.shaderc_result_get_error_message(result));
+        if (Shaderc.shaderc_result_get_compilation_status(compileResult) != Shaderc.shaderc_compilation_status_success) {
+            throw new RuntimeException("Failed to compile shader " + filename + " into SPIR-V:\n" + Shaderc.shaderc_result_get_error_message(compileResult));
         }
 
         Shaderc.shaderc_compiler_release(compiler);
 
-        return new SPIRV(result, Shaderc.shaderc_result_get_bytes(result));
+        return new SPIRV(compileResult, Shaderc.shaderc_result_get_bytes(compileResult));
 
 
     }

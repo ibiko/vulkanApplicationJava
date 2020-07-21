@@ -1277,7 +1277,8 @@ class VulkanApp {
 
     private void createTextureImage() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            String filename = ClassLoader.getSystemClassLoader().getResource("textures/chalet.jpg").getPath();
+            //TODO :: find a OS independent solution :: ibikov
+            String filename = ClassLoader.getSystemClassLoader().getResource("textures/chalet.jpg").getPath(); //WINDOWS add-> .substring(1);
 
             IntBuffer pWidth = stack.mallocInt(1);
             IntBuffer pHeight = stack.mallocInt(1);

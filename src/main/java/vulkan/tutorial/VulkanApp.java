@@ -1,5 +1,7 @@
 package vulkan.tutorial;
 
+import org.joml.Vector3f;
+import org.joml.Vector4f;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWVulkan;
@@ -138,6 +140,12 @@ class VulkanApp {
 
     private long sbtBuffer;
     private long sbtBufferMemory;
+    private int groupHandleSize;
+    private int groupAlignment;
+    private int groupCount;
+    private int sbtSize;
+
+    private boolean rtxOn = true;
 
     private static long createTextureSampler(VkDevice vkDevice, int mipLevels) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -640,6 +648,7 @@ class VulkanApp {
                 fps = 0;
             }
             GLFW.glfwPollEvents();
+
             drawFrame();
             fps++;
         }
@@ -707,14 +716,19 @@ class VulkanApp {
 
             VK11.vkGetPhysicalDeviceProperties2(this.vkPhysicalDevice, props2);
 
-
             int maxRecursionDepth = physicalDeviceRayTracingPropertiesNV.maxRecursionDepth();
-            int shaderGroupHandleSize = physicalDeviceRayTracingPropertiesNV.shaderGroupHandleSize();
+            //raygen, miss, chit
+            this.groupCount = 3;
+            this.groupHandleSize = physicalDeviceRayTracingPropertiesNV.shaderGroupHandleSize();
+            this.groupAlignment = physicalDeviceRayTracingPropertiesNV.shaderGroupBaseAlignment();
+            this.sbtSize = this.groupCount * this.groupAlignment;
 
             System.out.println("maxPushConstantSize: " + props2.properties().limits().maxPushConstantsSize());
             System.out.println("maxRecursion: " + maxRecursionDepth);
-            System.out.println("shaderGroupHandleSize: " + shaderGroupHandleSize);
-            System.out.println("shaderGroupBaseAlignment: " + physicalDeviceRayTracingPropertiesNV.shaderGroupBaseAlignment());
+            System.out.println("groupCount: " + this.groupCount);
+            System.out.println("sbtSize: " + this.sbtSize);
+            System.out.println("shaderGroupHandleSize: " + this.groupHandleSize);
+            System.out.println("shaderGroupBaseAlignment: " + this.groupAlignment);
 
         }
     }
@@ -1829,6 +1843,23 @@ class VulkanApp {
             VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.callocStack(stack);
             beginInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
 
+            if(this.rtxOn){
+                for (int i = 0; i < commandBuffersCount; i++) {
+                    VkCommandBuffer commandBuffer = this.commandBuffers.get(i);
+
+                    if (VK10.vkBeginCommandBuffer(commandBuffer, beginInfo) != VK10.VK_SUCCESS) {
+                        throw new RuntimeException("Failed to begin recording command buffer");
+                    }
+
+                    rayTrace(i);
+
+                    if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
+                        throw new RuntimeException("Failed to record command buffer");
+                    }
+                }
+                return;
+            }
+
             VkRenderPassBeginInfo renderPassInfo = VkRenderPassBeginInfo.callocStack(stack);
             renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
             renderPassInfo.renderPass(this.renderPass);
@@ -2134,7 +2165,7 @@ class VulkanApp {
 
             VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = VkPipelineLayoutCreateInfo.callocStack(stack);
             pipelineLayoutCreateInfo.sType(VK10.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
-            pipelineLayoutCreateInfo.pPushConstantRanges(pushConstant);
+//            pipelineLayoutCreateInfo.pPushConstantRanges(pushConstant);
             pipelineLayoutCreateInfo.pSetLayouts(layouts);
 
             LongBuffer pPipelineLayout = stack.longs(VK10.VK_NULL_HANDLE);
@@ -2174,19 +2205,14 @@ class VulkanApp {
 
     private void createRtShaderBindingTable() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            int groupCount = 3; //raygen, miss, chit
-            int groupHandleSize = 16;
-            int groupAlignment = 63;
 
-            int sbtSize = groupCount * groupAlignment;
-
-            ByteBuffer shaderHandleStorage = stack.malloc(sbtSize);
-            NVRayTracing.vkGetRayTracingShaderGroupHandlesNV(this.vkDevice, this.rtPipeline, 0, groupCount, shaderHandleStorage);
+            ByteBuffer shaderHandleStorage = stack.malloc(this.sbtSize);
+            NVRayTracing.vkGetRayTracingShaderGroupHandlesNV(this.vkDevice, this.rtPipeline, 0, this.groupCount, shaderHandleStorage);
 
             LongBuffer pBuffer = stack.mallocLong(1);
             LongBuffer pBufferMemory = stack.mallocLong(1);
 
-            createAllocateBindBuffer(sbtSize,
+            createAllocateBindBuffer(this.sbtSize,
                     VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                     VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                     pBuffer,
@@ -2195,13 +2221,82 @@ class VulkanApp {
             this.sbtBuffer = pBuffer.get(0);
             this.sbtBufferMemory = pBufferMemory.get(0);
 
-            PointerBuffer data = stack.mallocPointer(sbtSize);
-            VK10.vkMapMemory(this.vkDevice, this.sbtBufferMemory, 0, sbtSize, 0, data);
+            PointerBuffer data = stack.mallocPointer(this.sbtSize);
+            VK10.vkMapMemory(this.vkDevice, this.sbtBufferMemory, 0, this.sbtSize, 0, data);
             {
                 //TODO maybe this needs to be changed, it will be shown if the traceRaysNV doesnt work :: ibikov
-                ByteBufferUtils.copyIntoBufferNew(data.getByteBuffer(0, sbtSize), shaderHandleStorage, groupHandleSize, groupCount);
+                ByteBufferUtils.copyIntoBufferNew(data.getByteBuffer(0, this.sbtSize), shaderHandleStorage, this.groupHandleSize, this.groupCount);
             }
             VK10.vkUnmapMemory(this.vkDevice, this.sbtBufferMemory);
+        }
+    }
+
+    private void rayTrace(int counter) {
+        //clearColor
+        //lightPosition
+        //lightIntensity
+        //lightType
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+
+            RtPushConstant rtPushConstant = new RtPushConstant();
+            rtPushConstant.getClearColor().set(0, 0, 0);
+            rtPushConstant.getLightPosition().set(new Vector3f(10.f, 15.f, 8.f));
+            rtPushConstant.setLightIntensity(100f);
+            rtPushConstant.setLightType(0);  // 0: point, 1: infinite
+
+            VK10.vkCmdBindPipeline(this.commandBuffers.get(counter), NVRayTracing.VK_PIPELINE_BIND_POINT_RAY_TRACING_NV, this.rtPipeline);
+            VK10.vkCmdBindDescriptorSets(this.commandBuffers.get(counter), NVRayTracing.VK_PIPELINE_BIND_POINT_RAY_TRACING_NV,
+                    this.rtPipelineLayout, 0, stack.longs(this.rtDescriptorSets.get(counter)), null);
+
+
+//            LongBuffer pBuffer = stack.mallocLong(1);
+//            LongBuffer pBufferMemory = stack.mallocLong(1);
+//
+//                createAllocateBindBuffer(RtPushConstant.SIZE_OF,
+//                        VK10.VK_BUFFER_USAGE_,
+//                        VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+//                        pBuffer,
+//                        pBufferMemory, this.vkDevice, this.vkPhysicalDevice);
+//                this.uniformBuffers.add(pBuffer.get(0));
+//                this.uniformBuffersMemory.add(pBufferMemory.get(0));
+//
+//            Buffer data = stack.mallocPointer(1);
+//            VK10.vkMapMemory(this.vkDevice, pBufferMemory.get(0), 0, RtPushConstant.SIZE_OF, 0, data);
+//            {
+//                ByteBufferUtils.copyIntoBuffer(data.getByteBuffer(0, UniformBufferObject.SIZEOF), rtPushConstant);
+//            }
+//            VK10.vkUnmapMemory(this.vkDevice, pBufferMemory.get(0));
+
+//            VK10.vkCmdPushConstants(this.commandBuffers.get(counter),
+//                    this.rtPipelineLayout,
+//                    NVRayTracing.VK_SHADER_STAGE_RAYGEN_BIT_NV | NVRayTracing.VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV | NVRayTracing.VK_SHADER_STAGE_MISS_BIT_NV,
+//                    0,
+//                    data);
+
+            int progSize = this.groupAlignment;
+            int rayGenOffset = 0;
+            int missOffset = progSize;
+            int hitGroupOffset = 3 * progSize;
+
+
+            NVRayTracing.vkCmdTraceRaysNV(this.commandBuffers.get(counter),
+                    this.sbtBuffer,
+                    rayGenOffset,
+
+                    this.sbtBuffer,
+                    missOffset,
+                    progSize,
+
+                    this.sbtBuffer,
+                    hitGroupOffset,
+                    progSize,
+
+                    VK10.VK_NULL_HANDLE,
+                    VK10.VK_NULL_HANDLE,
+                    VK10.VK_NULL_HANDLE,
+                    this.window.getWidth(),
+                    this.window.getHeight(),
+                    1);
         }
     }
 

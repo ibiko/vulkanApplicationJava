@@ -9,7 +9,7 @@ import java.nio.ByteBuffer;
 
 public class ByteBufferUtils {
 
-    private ByteBufferUtils(){
+    private ByteBufferUtils() {
         //Util class
     }
 
@@ -19,6 +19,8 @@ public class ByteBufferUtils {
         uniformBufferObject.getModel().get(0, byteBuffer);
         uniformBufferObject.getView().get(AlignmentUtils.alignAs(mat4size, AlignmentUtils.alignOf(uniformBufferObject.getView())), byteBuffer);
         uniformBufferObject.getProjection().get(AlignmentUtils.alignAs(mat4size * 2, AlignmentUtils.alignOf(uniformBufferObject.getView())), byteBuffer);
+        uniformBufferObject.getViewInverse().get(AlignmentUtils.alignAs(mat4size * 3, AlignmentUtils.alignOf(uniformBufferObject.getView())), byteBuffer);
+        uniformBufferObject.getProjectionInverse().get(AlignmentUtils.alignAs(mat4size * 4, AlignmentUtils.alignOf(uniformBufferObject.getView())), byteBuffer);
     }
 
     public static void copyIntoBuffer(ByteBuffer dst, ByteBuffer src, long size) {
@@ -54,10 +56,10 @@ public class ByteBufferUtils {
         for (int i = 0; i < geometry.getTransform().length; i++) {
             byteBuffer.putFloat(geometry.getTransform()[i]);
         }
-            byteBuffer.putLong(geometry.getAccelerationStructureHandle());
-            byteBuffer.putInt(geometry.getHitGroupId());
-            byteBuffer.putInt(geometry.getInstanceId());
-            byteBuffer.putInt(geometry.getMask());
+        byteBuffer.putLong(geometry.getAccelerationStructureHandle());
+        byteBuffer.putInt(geometry.getHitGroupId());
+        byteBuffer.putInt(geometry.getInstanceId());
+        byteBuffer.putInt(geometry.getMask());
     }
 
     public static void copyIntoBufferNew(ByteBuffer dst, ByteBuffer src, int groupHandleSize, int groupCount) {

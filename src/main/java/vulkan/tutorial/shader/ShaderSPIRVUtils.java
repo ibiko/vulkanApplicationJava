@@ -11,7 +11,7 @@ import java.nio.file.Paths;
 
 public class ShaderSPIRVUtils {
 
-    private ShaderSPIRVUtils(){
+    private ShaderSPIRVUtils() {
         //Utils class
     }
 

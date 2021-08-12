@@ -2,6 +2,7 @@ package vulkan.tutorial.shader;
 
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.shaderc.Shaderc;
+import vulkan.tutorial.VulkanAppEntryPoint;
 
 import java.io.IOException;
 import java.net.URI;
@@ -16,7 +17,8 @@ public class ShaderSPIRVUtils {
     }
 
     public static SPIRV compileShaderFile(String shaderFile, ShaderKind shaderKind) {
-        return compileShaderAbsoluteFile(ClassLoader.getSystemClassLoader().getResource(shaderFile).toExternalForm(), shaderKind);
+        //TODO check if classpath:URI can work
+        return compileShaderAbsoluteFile(VulkanAppEntryPoint.class.getClassLoader().getResource(shaderFile).toExternalForm(), shaderKind);
     }
 
     private static SPIRV compileShaderAbsoluteFile(String shaderFile, ShaderKind shaderKind) {

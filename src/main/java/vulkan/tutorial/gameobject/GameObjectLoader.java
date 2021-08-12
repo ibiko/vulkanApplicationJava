@@ -3,6 +3,7 @@ package vulkan.tutorial.gameobject;
 import org.joml.Vector3f;
 import org.joml.Vector3fc;
 import org.lwjgl.assimp.Assimp;
+import vulkan.tutorial.VulkanAppEntryPoint;
 import vulkan.tutorial.math.Vertex;
 import vulkan.tutorial.mesh.Model;
 import vulkan.tutorial.mesh.ModelLoader;
@@ -17,7 +18,8 @@ public class GameObjectLoader {
     }
 
     public static GameObject loadModel(String path) {
-        URL url = ClassLoader.getSystemClassLoader().getResource(path);
+        //TODO check if classpath:URI can work
+        URL url = VulkanAppEntryPoint.class.getClassLoader().getResource(path);
 
         if (url == null) {
             throw new RuntimeException("Cant find resource on the path: " + path);

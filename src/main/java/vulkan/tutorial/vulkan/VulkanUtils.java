@@ -89,6 +89,19 @@ public class VulkanUtils {
             VkPhysicalDeviceProperties physicalDeviceProperties = VkPhysicalDeviceProperties.mallocStack(stack);
             VK10.vkGetPhysicalDeviceProperties(vkPhysicalDevice, physicalDeviceProperties);
 
+            int vulkanMajorVersion = physicalDeviceProperties.apiVersion() >> 22;
+            int vulkanMinorVersion = physicalDeviceProperties.apiVersion() >> 12 & 0x3ff;
+            int vulkanPatchVersion = physicalDeviceProperties.apiVersion() & 0xfff;
+            System.out.println("Vulkan API: " +vulkanMajorVersion + "." + vulkanMinorVersion + "." + vulkanPatchVersion);
+
+            int driverMajorVersion = physicalDeviceProperties.driverVersion() >> 22;
+            int driverMinorVersion = physicalDeviceProperties.driverVersion() >> 12 & 0x3ff;
+            int driverPatchVersion = physicalDeviceProperties.driverVersion() & 0xfff;
+            System.out.println("Driver version: " + driverMajorVersion + "." + driverMinorVersion + "." +driverPatchVersion);
+
+            System.out.println("Device name: " + physicalDeviceProperties.deviceNameString());
+
+
             int sampleCountFlags = physicalDeviceProperties.limits().framebufferColorSampleCounts()
                     & physicalDeviceProperties.limits().framebufferDepthSampleCounts();
 

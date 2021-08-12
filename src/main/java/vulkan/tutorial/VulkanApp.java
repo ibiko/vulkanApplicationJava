@@ -1032,7 +1032,7 @@ class VulkanApp {
                     pStorageImage,
                     pStorageImageMemory,
                     1,
-                    1);
+                    VK10.VK_SAMPLE_COUNT_1_BIT);
 
             this.rtStorageImage = pStorageImage.get(0);
             this.rtStorageImageMemory = pStorageImageMemory.get(0);
@@ -1224,12 +1224,12 @@ class VulkanApp {
             submitInfo.pCommandBuffers(stack.pointers(this.commandBuffers.get(imageIndex)));
 
             VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
-
+            System.out.println("pre submit");
             if (VK10.vkQueueSubmit(this.vkGraphicsQueue, submitInfo, thisFrame.getFence()) != VK10.VK_SUCCESS) {
                 VK10.vkResetFences(this.vkDevice, thisFrame.pFence());
                 throw new RuntimeException("Failed to submit draw command buffer");
             }
-
+            System.out.println("post submit");
             VkPresentInfoKHR presentInfoKHR = VkPresentInfoKHR.callocStack(stack);
             presentInfoKHR.sType(KHRSwapchain.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
             presentInfoKHR.pWaitSemaphores(thisFrame.pRenderFinishedSemaphore());
@@ -1237,8 +1237,8 @@ class VulkanApp {
             presentInfoKHR.pSwapchains(stack.longs(this.swapChain));
             presentInfoKHR.pImageIndices(pImageIndex);
 
+            System.out.println("pre present");
             vkResult = KHRSwapchain.vkQueuePresentKHR(this.vkPresentQueue, presentInfoKHR);
-
             if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR || vkResult == KHRSwapchain.VK_SUBOPTIMAL_KHR || this.window.isWindowResized()) {
                 this.window.setWindowResized(false);
                 recreateSwapChain();
@@ -1246,6 +1246,7 @@ class VulkanApp {
                 throw new RuntimeException("Failed to present swap chain image");
             }
 
+            System.out.println("post present");
             this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
     }
@@ -1256,8 +1257,9 @@ class VulkanApp {
 
     private void createTextureImage() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
+
             //TODO :: find a OS independent solution :: ibikov
-            String filename = ClassLoader.getSystemClassLoader().getResource("textures/chalet.jpg").getPath().substring(1); //WINDOWS add-> .substring(1);
+            String filename = VulkanAppEntryPoint.class.getClassLoader().getResource("textures/chalet.jpg").getPath(); //WINDOWS add-> .substring(1);
 
             IntBuffer pWidth = stack.mallocInt(1);
             IntBuffer pHeight = stack.mallocInt(1);
@@ -2219,6 +2221,7 @@ class VulkanApp {
         int hitGroupOffset = 3 * progSize;
 
 
+        System.out.println("pre traceRays");
         NVRayTracing.vkCmdTraceRaysNV(this.commandBuffers.get(i),
                 this.sbtBuffer,
                 rayGenOffset,
@@ -2237,7 +2240,7 @@ class VulkanApp {
                 this.window.getWidth(),
                 this.window.getHeight(),
                 1);
-
+        System.out.println("post traceRays");
         //copy RT image output to swapchain image
                     /*
 				Copy raytracing output to swap chain image

@@ -3,7 +3,7 @@ package vulkan.tutorial;
 
 public class VulkanAppEntryPoint {
 
-    //firts checkin
+    //first checkin
     public static void main(String[] args) {
         VulkanApp app = new VulkanApp();
         app.run();
